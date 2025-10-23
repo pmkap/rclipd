@@ -30,6 +30,7 @@ pub fn init(device: *zwlr.DataControlDeviceV1) !*Self {
 fn dataControlListener(device: *zwlr.DataControlDeviceV1, event: zwlr.DataControlDeviceV1.Event, self: *Self) void {
     switch (event) {
         .data_offer => |ev| {
+            std.debug.print("Event received: data offer\n", .{});
             assert(self.mime_types.items.len == 0);
             if (self.offer) |old_offer| {
                 old_offer.destroy();
@@ -38,13 +39,15 @@ fn dataControlListener(device: *zwlr.DataControlDeviceV1, event: zwlr.DataContro
             self.offer.?.setListener(*Self, dataControlOfferListener, self);
         },
         .selection => |ev| {
+            std.debug.print("Event received: selection {any}\n", .{ev.id});
             defer self.mime_types.clearRetainingCapacity();
             // TODO: free the underlying bytes of mime_types they are leaking currently
 
-            if (ev.id != null) {
+            if (ev.id) |offer| {
+                assert(offer == self.offer.?);
                 var entry: Db.Entry = .{ .timestamp = 0 };
                 for (self.mime_types.items) |mime| {
-                    const content = receiveOffer(self.offer.?, mime) catch return; // TODO: these need to freed as well, currently leaking
+                    const content = receiveOffer(offer, mime) catch return; // TODO: these need to freed as well, currently leaking
                     entry.mimes.append(allocator, .{
                         .name = mime,
                         .content = content,
@@ -55,16 +58,24 @@ fn dataControlListener(device: *zwlr.DataControlDeviceV1, event: zwlr.DataContro
                 }
                 std.debug.print("\n", .{});
             } else {
-                self.offer.?.destroy();
-                self.offer = null;
+                if (self.offer) |old_offer| {
+                    old_offer.destroy();
+                    self.offer = null;
+                }
             }
         },
         .primary_selection => |ev| {
+            std.debug.print("Event received: primary selection {any}\n", .{ev.id});
             self.mime_types.clearRetainingCapacity();
             // TODO: free the underlying bytes of mime_types they are leaking currently
-            if (ev.id == null) {
-                self.offer.?.destroy();
-                self.offer = null;
+
+            if (ev.id) |offer| {
+                assert(offer == self.offer.?);
+            } else {
+                if (self.offer) |old_offer| {
+                    old_offer.destroy();
+                    self.offer = null;
+                }
             }
         },
         .finished => {
