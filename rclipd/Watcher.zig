@@ -2,6 +2,7 @@ const std = @import("std");
 const mem = std.mem;
 const allocator = std.heap.c_allocator;
 const assert = std.debug.assert;
+const log = std.log;
 
 const wayland = @import("wayland");
 const wl = wayland.client.wl;
@@ -30,7 +31,7 @@ pub fn init(device: *zwlr.DataControlDeviceV1) !*Self {
 fn dataControlListener(device: *zwlr.DataControlDeviceV1, event: zwlr.DataControlDeviceV1.Event, self: *Self) void {
     switch (event) {
         .data_offer => |ev| {
-            std.debug.print("Event received: data offer\n", .{});
+            log.debug("Event received: data offer", .{});
             assert(self.mime_types.items.len == 0);
             if (self.offer) |old_offer| {
                 old_offer.destroy();
@@ -39,7 +40,7 @@ fn dataControlListener(device: *zwlr.DataControlDeviceV1, event: zwlr.DataContro
             self.offer.?.setListener(*Self, dataControlOfferListener, self);
         },
         .selection => |ev| {
-            std.debug.print("Event received: selection {any}\n", .{ev.id});
+            log.debug("Event received: selection {any}", .{ev.id});
             defer self.mime_types.clearRetainingCapacity();
             // TODO: free the underlying bytes of mime_types they are leaking currently
 
@@ -52,11 +53,8 @@ fn dataControlListener(device: *zwlr.DataControlDeviceV1, event: zwlr.DataContro
                         .name = mime,
                         .content = content,
                     }) catch return;
+                    log.debug("Received {s} for event {any}", .{ mime, offer });
                 }
-                for (entry.mimes.items) |b| {
-                    std.debug.print("{s}: {s}\n", .{ b.name, b.content });
-                }
-                std.debug.print("\n", .{});
             } else {
                 if (self.offer) |old_offer| {
                     old_offer.destroy();
@@ -65,7 +63,7 @@ fn dataControlListener(device: *zwlr.DataControlDeviceV1, event: zwlr.DataContro
             }
         },
         .primary_selection => |ev| {
-            std.debug.print("Event received: primary selection {any}\n", .{ev.id});
+            log.debug("Event received: primary selection {any}", .{ev.id});
             self.mime_types.clearRetainingCapacity();
             // TODO: free the underlying bytes of mime_types they are leaking currently
 
