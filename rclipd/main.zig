@@ -27,7 +27,8 @@ pub fn main() anyerror!void {
     const data_control_device = try globals.data_control_manager.?.getDataDevice(globals.seat.?);
 
     // Setup all tasks
-    _ = try Watcher.init(data_control_device);
+    const watcher = try Watcher.init(data_control_device);
+    defer watcher.deinit();
 
     while (true) {
         _ = display.dispatch();

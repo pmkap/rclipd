@@ -31,6 +31,12 @@ pub fn init(device: *zwlr.DataControlDeviceV1) !*Self {
     return self;
 }
 
+pub fn deinit(self: *Self) void {
+    self.db.deinit();
+    self.mime_types.deinit(allocator);
+    allocator.destroy(self);
+}
+
 fn dataControlListener(device: *zwlr.DataControlDeviceV1, event: zwlr.DataControlDeviceV1.Event, self: *Self) void {
     switch (event) {
         .data_offer => |ev| {
