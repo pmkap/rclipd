@@ -7,6 +7,10 @@
             .url = "https://codeberg.org/ifreund/zig-wayland/archive/v0.4.0.tar.gz",
             .hash = "wayland-0.4.0-lQa1khbMAQAsLS2eBR7M5lofyEGPIbu2iFDmoz8lPC27",
         },
+        .zqlite = .{
+            .url = "git+https://github.com/karlseguin/zqlite.zig#e3b6972230ccb1d2069e1ff298699d73b3180b3c",
+            .hash = "zqlite-0.0.0-RWLaY-C4mADQvgmoLhHD-cHtCgKYdQNAoqASip2uJzBL",
+        },
     },
     .fingerprint = 0x7aac64572e09cc14,
 }

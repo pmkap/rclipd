@@ -32,5 +32,13 @@ pub fn build(b: *Build) !void {
     exe.linkLibC();
     exe.linkSystemLibrary("wayland-client");
 
+    const zqlite = b.dependency("zqlite", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    exe.linkLibC();
+    exe.linkSystemLibrary("sqlite3");
+    exe.root_module.addImport("zqlite", zqlite.module("zqlite"));
+
     b.installArtifact(exe);
 }

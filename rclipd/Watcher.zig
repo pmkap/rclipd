@@ -15,12 +15,15 @@ const Self = @This();
 
 offer: ?*zwlr.DataControlOfferV1,
 mime_types: std.ArrayListUnmanaged([*:0]const u8),
+db: Db,
 
 pub fn init(device: *zwlr.DataControlDeviceV1) !*Self {
+    const db = try Db.init();
     const self = try allocator.create(Self);
     self.* = Self{
         .offer = null,
         .mime_types = std.ArrayListUnmanaged([*:0]const u8){},
+        .db = db,
     };
 
     device.setListener(*Self, dataControlListener, self);
@@ -59,7 +62,7 @@ fn dataControlListener(device: *zwlr.DataControlDeviceV1, event: zwlr.DataContro
                     blobs.append(allocator, Db.model.Blob{ .data = content, .size = content.len }) catch return;
                     mimes.append(allocator, Db.model.Mime{ .mime = mem.span(m) }) catch return;
                 }
-                Db.addEntry(blobs, mimes) catch return;
+                self.db.addEntry(blobs, mimes) catch return;
             } else {
                 if (self.offer) |old_offer| {
                     old_offer.destroy();
