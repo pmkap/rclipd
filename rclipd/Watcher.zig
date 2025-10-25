@@ -46,15 +46,20 @@ fn dataControlListener(device: *zwlr.DataControlDeviceV1, event: zwlr.DataContro
 
             if (ev.id) |offer| {
                 assert(offer == self.offer.?);
-                var entry: Db.Entry = .{ .timestamp = 0 };
-                for (self.mime_types.items) |mime| {
-                    const content = receiveOffer(offer, mime) catch return; // TODO: these need to freed as well, currently leaking
-                    entry.mimes.append(allocator, .{
-                        .name = mime,
-                        .content = content,
-                    }) catch return;
-                    log.debug("Received {s} for event {any}", .{ mime, offer });
+
+                var blobs = std.ArrayListUnmanaged(Db.model.Blob){};
+                defer blobs.deinit(allocator);
+
+                var mimes = std.ArrayListUnmanaged(Db.model.Mime){};
+                defer mimes.deinit(allocator);
+
+                for (self.mime_types.items) |m| {
+                    const content = receiveOffer(offer, m) catch return; // TODO: these need to freed as well, currently leaking
+                    log.debug("Received {s} for event {any}", .{ m, offer });
+                    blobs.append(allocator, Db.model.Blob{ .data = content, .size = content.len }) catch return;
+                    mimes.append(allocator, Db.model.Mime{ .mime = mem.span(m) }) catch return;
                 }
+                Db.addEntry(blobs, mimes) catch return;
             } else {
                 if (self.offer) |old_offer| {
                     old_offer.destroy();
