@@ -140,6 +140,7 @@ pub fn addEntry(self: *Self, blobs: std.ArrayListUnmanaged([]const u8), mimes: s
         defer blob_hashes.deinit(allocator);
 
         var content_hasher = Hash.init(self.seed);
+        var preview: []const u8 = "no preview";
 
         for (blobs.items, mimes.items) |data, mime| {
             const hash: i64 = @bitCast(Hash.hash(self.seed, data));
@@ -147,10 +148,13 @@ pub fn addEntry(self: *Self, blobs: std.ArrayListUnmanaged([]const u8), mimes: s
 
             content_hasher.update(mime);
             content_hasher.update(mem.asBytes(&hash));
+            if (std.ascii.startsWithIgnoreCase(mime, "text/plain")) {
+                preview = data[0..@min(data.len, 100)];
+            }
         }
         const content_hash: i64 = @bitCast(content_hasher.final());
 
-        const entry_result = Entry.upsert(self, content_hash, "dummy preview") catch |err| {
+        const entry_result = Entry.upsert(self, content_hash, preview) catch |err| {
             log.err("SQLite error when upserting entry {s}: {s}", .{ @errorName(err), self.conn.lastError() });
             return err;
         };
