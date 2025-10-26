@@ -2,7 +2,7 @@ const std = @import("std");
 const mem = std.mem;
 const allocator = std.heap.c_allocator;
 const assert = std.debug.assert;
-const log = std.log;
+const log = std.log.scoped(.Watcher);
 
 const wayland = @import("wayland");
 const wl = wayland.client.wl;

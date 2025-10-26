@@ -2,7 +2,7 @@ const std = @import("std");
 const mem = std.mem;
 const assert = std.debug.assert;
 const allocator = std.heap.c_allocator;
-const log = std.log;
+const log = std.log.scoped(.Db);
 const Hash = std.hash.XxHash3;
 
 const zqlite = @import("zqlite");
@@ -38,7 +38,7 @@ const Blob = struct {
                 \\VALUES (?, ?, ?)
             , .{ hash, data, data.len });
             const id = db.conn.lastInsertedRowId();
-            log.debug("Db: blob {} inserted", .{id});
+            log.debug("blob {} inserted", .{id});
             return id;
         }
     }
@@ -72,7 +72,7 @@ const Entry = struct {
                 \\SET timestamp = strftime('%s','now')
                 \\WHERE id = ?;
             , .{id});
-            log.debug("Db: entry {} updated", .{id});
+            log.debug("entry {} updated", .{id});
             return .{ .id = id, .updated = true };
         } else {
             try db.conn.exec(
@@ -80,7 +80,7 @@ const Entry = struct {
                 \\VALUES (?, ?)
             , .{ content_hash, preview });
             const id = db.conn.lastInsertedRowId();
-            log.debug("Db: entry {} inserted", .{id});
+            log.debug("entry {} inserted", .{id});
             return .{ .id = id, .updated = false };
         }
     }
@@ -103,6 +103,7 @@ const Mime = struct {
             \\VALUES (?, ?, ?)
             \\ON CONFLICT DO NOTHING;
         , .{ entry_id, blob_id, name });
+        log.debug("mime inserted", .{});
     }
 };
 
@@ -150,7 +151,7 @@ pub fn addEntry(self: *Self, blobs: std.ArrayListUnmanaged([]const u8), mimes: s
         const content_hash: i64 = @bitCast(content_hasher.final());
 
         const entry_result = Entry.upsert(self, content_hash, "dummy preview") catch |err| {
-            log.err("SQLite error {s}: {s}", .{ @errorName(err), self.conn.lastError() });
+            log.err("SQLite error when upserting entry {s}: {s}", .{ @errorName(err), self.conn.lastError() });
             return err;
         };
 
@@ -160,7 +161,7 @@ pub fn addEntry(self: *Self, blobs: std.ArrayListUnmanaged([]const u8), mimes: s
         if (!entry_result.updated) {
             for (blobs.items, blob_hashes.items) |data, hash| {
                 const blob_id = Blob.upsert(self, hash, data) catch |err| {
-                    log.err("SQLite error {s}: {s}", .{ @errorName(err), self.conn.lastError() });
+                    log.err("SQLite error when upserting blob{s}: {s}", .{ @errorName(err), self.conn.lastError() });
                     return err;
                 };
                 try blob_ids.append(allocator, blob_id);
@@ -169,7 +170,7 @@ pub fn addEntry(self: *Self, blobs: std.ArrayListUnmanaged([]const u8), mimes: s
             assert(mimes.items.len == blob_ids.items.len);
             for (blob_ids.items, mimes.items) |blob_id, mime| {
                 Mime.insert(self, entry_result.id, blob_id, mime) catch |err| {
-                    log.err("SQLite error {s}: {s}", .{ @errorName(err), self.conn.lastError() });
+                    log.err("SQLite error when inserting mime {s}: {s}", .{ @errorName(err), self.conn.lastError() });
                     return err;
                 };
             }
