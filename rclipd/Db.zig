@@ -24,6 +24,7 @@ const Blob = struct {
             \\);
         , .{});
     }
+
     fn upsert(db: *Db, hash: i64, data: []const u8) !i64 {
         const row = try db.conn.row(
             \\SELECT id FROM blob
@@ -55,10 +56,12 @@ const Entry = struct {
             \\);
         , .{});
     }
+
     const UpsertResult = struct {
         id: i64,
         updated: bool,
     };
+
     fn upsert(db: *Db, content_hash: i64, preview: []const u8) !UpsertResult {
         const row = try db.conn.row(
             \\SELECT id FROM entry
@@ -84,6 +87,28 @@ const Entry = struct {
             return .{ .id = id, .updated = false };
         }
     }
+
+    // Caller owns the returned memory
+    fn list(db: *Db) ![]const u8 {
+        var rows = try db.conn.rows(
+            \\SELECT id, preview FROM entry;
+        , .{});
+        defer rows.deinit();
+
+        var result = std.ArrayListUnmanaged(u8){};
+        defer result.deinit(allocator);
+
+        // TODO: escape tabs or quote preview
+        while (rows.next()) |row| {
+            try std.fmt.format(result.writer(allocator), "{}\t{s}\n", .{
+                row.int(0),
+                row.text(1),
+            });
+        }
+        if (rows.err) |err| return err;
+
+        return result.toOwnedSlice(allocator);
+    }
 };
 
 const Mime = struct {
@@ -97,6 +122,7 @@ const Mime = struct {
             \\);
         , .{});
     }
+
     fn insert(db: *Db, entry_id: i64, blob_id: i64, name: []const u8) !void {
         try db.conn.exec(
             \\INSERT INTO mime (entry_id, blob_id, name)
