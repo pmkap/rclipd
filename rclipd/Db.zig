@@ -98,11 +98,28 @@ const Entry = struct {
         var result = std.ArrayListUnmanaged(u8){};
         defer result.deinit(allocator);
 
-        // TODO: escape tabs or quote preview
         while (rows.next()) |row| {
+            var preview = std.ArrayListUnmanaged(u8){};
+            defer preview.deinit(allocator);
+
+            // opening quote for preview
+            try preview.append(allocator, '"');
+
+            // escape quotes and backslashes
+            for (row.text(1)) |c| {
+                switch (c) {
+                    '"' => try preview.appendSlice(allocator, "\\\""),
+                    '\\' => try preview.appendSlice(allocator, "\\\\"),
+                    else => try preview.append(allocator, c),
+                }
+            }
+
+            // closing quote for preview
+            try preview.append(allocator, '"');
+
             try std.fmt.format(result.writer(allocator), "{}\t{s}\n", .{
                 row.int(0),
-                row.text(1),
+                preview.items,
             });
         }
         if (rows.err) |err| return err;
