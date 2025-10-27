@@ -136,6 +136,8 @@ const Mime = struct {
 };
 
 pub fn init() !Self {
+    _ = std.c.umask(0o077);
+
     // good idea to pass EXResCode to get extended result codes (more detailed error codes)
     const flags = zqlite.OpenFlags.Create | zqlite.OpenFlags.EXResCode;
 
