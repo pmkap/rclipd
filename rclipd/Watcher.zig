@@ -51,19 +51,20 @@ fn dataControlListener(device: *zwlr.DataControlDeviceV1, event: zwlr.DataContro
         .selection => |ev| {
             log.debug("Event received: selection {any}", .{ev.id});
             defer self.mime_types.clearRetainingCapacity();
-            // TODO: free the underlying bytes of mime_types they are leaking currently
+            defer for (self.mime_types.items) |i| allocator.free(i[0 .. mem.len(i) + 1]);
 
             if (ev.id) |offer| {
                 assert(offer == self.offer.?);
 
-                var blobs = std.ArrayListUnmanaged([]const u8){};
-                defer blobs.deinit(allocator);
-
                 var mimes = std.ArrayListUnmanaged([]const u8){};
                 defer mimes.deinit(allocator);
 
+                var blobs = std.ArrayListUnmanaged([]const u8){};
+                defer blobs.deinit(allocator);
+                defer for (blobs.items) |i| allocator.free(i);
+
                 for (self.mime_types.items) |mime| {
-                    const content = receiveOffer(offer, mime) catch return; // TODO: these need to freed as well, currently leaking
+                    const content = receiveOfferAlloc(offer, mime) catch return;
                     log.debug("Received {s} for event {any}", .{ mime, offer });
                     blobs.append(allocator, content) catch return;
                     mimes.append(allocator, mem.span(mime)) catch return;
@@ -78,8 +79,8 @@ fn dataControlListener(device: *zwlr.DataControlDeviceV1, event: zwlr.DataContro
         },
         .primary_selection => |ev| {
             log.debug("Event received: primary selection {any}", .{ev.id});
+            for (self.mime_types.items) |i| allocator.free(i[0 .. mem.len(i) + 1]);
             self.mime_types.clearRetainingCapacity();
-            // TODO: free the underlying bytes of mime_types they are leaking currently
 
             if (ev.id) |offer| {
                 assert(offer == self.offer.?);
@@ -96,7 +97,7 @@ fn dataControlListener(device: *zwlr.DataControlDeviceV1, event: zwlr.DataContro
     }
 }
 
-// Self owns the returned memory, careful with the length when freeing
+/// Watcher/Self owns the returned memory in self.mime_types, careful with the length when freeing
 fn dataControlOfferListener(_: *zwlr.DataControlOfferV1, event: zwlr.DataControlOfferV1.Event, self: *Self) void {
     switch (event) {
         .offer => |ev| {
@@ -112,8 +113,8 @@ fn dataControlOfferListener(_: *zwlr.DataControlOfferV1, event: zwlr.DataControl
     }
 }
 
-// Caller owns the returned memory
-fn receiveOffer(offer: *zwlr.DataControlOfferV1, mime: [*:0]const u8) ![]u8 {
+/// Caller owns the returned memory
+fn receiveOfferAlloc(offer: *zwlr.DataControlOfferV1, mime: [*:0]const u8) ![]u8 {
     const fd = try std.posix.pipe();
     const fd_read = fd[0];
     const fd_write = fd[1];
