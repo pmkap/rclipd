@@ -72,9 +72,10 @@ const Entry = struct {
             const id = r.int(0);
             try db.conn.exec(
                 \\UPDATE entry
-                \\SET timestamp = strftime('%s','now')
+                \\SET timestamp = strftime('%s','now'),
+                \\    preview = ?
                 \\WHERE id = ?;
-            , .{id});
+            , .{ preview, id });
             log.debug("entry {} updated", .{id});
             return .{ .id = id, .updated = true };
         } else {
@@ -88,8 +89,10 @@ const Entry = struct {
         }
     }
 
-    // Caller owns the returned memory
-    fn list(db: *Db) ![]const u8 {
+    /// This creates a table of ids and previews
+    /// \n and \t are used as delimiter so it can be used with with a dmenu-like tool
+    /// Caller owns the returned memory
+    fn listAlloc(db: *Db) ![]const u8 {
         var rows = try db.conn.rows(
             \\SELECT id, preview FROM entry;
         , .{});
@@ -99,27 +102,9 @@ const Entry = struct {
         defer result.deinit(allocator);
 
         while (rows.next()) |row| {
-            var preview = std.ArrayListUnmanaged(u8){};
-            defer preview.deinit(allocator);
-
-            // opening quote for preview
-            try preview.append(allocator, '"');
-
-            // escape quotes and backslashes
-            for (row.text(1)) |c| {
-                switch (c) {
-                    '"' => try preview.appendSlice(allocator, "\\\""),
-                    '\\' => try preview.appendSlice(allocator, "\\\\"),
-                    else => try preview.append(allocator, c),
-                }
-            }
-
-            // closing quote for preview
-            try preview.append(allocator, '"');
-
             try std.fmt.format(result.writer(allocator), "{}\t{s}\n", .{
                 row.int(0),
-                preview.items,
+                row.text(1),
             });
         }
         if (rows.err) |err| return err;
@@ -192,7 +177,7 @@ pub fn addEntry(self: *Self, blobs: std.ArrayListUnmanaged([]const u8), mimes: s
             content_hasher.update(mime);
             content_hasher.update(mem.asBytes(&hash));
             if (std.ascii.startsWithIgnoreCase(mime, "text/plain")) {
-                preview = data[0..@min(data.len, 100)];
+                preview = try generatePreviewAlloc(data);
             }
         }
         const content_hash: i64 = @bitCast(content_hasher.final());
@@ -224,4 +209,20 @@ pub fn addEntry(self: *Self, blobs: std.ArrayListUnmanaged([]const u8), mimes: s
         }
     }
     try self.conn.exec("COMMIT;", .{});
+}
+
+fn generatePreviewAlloc(data: []const u8) ![]const u8 {
+    const slice = data[0..@min(data.len, 100)];
+
+    var result = std.ArrayListUnmanaged(u8){};
+    defer result.deinit(allocator);
+
+    for (slice) |c| {
+        switch (c) {
+            '\n', '\t' => try result.append(allocator, ' '),
+            else => try result.append(allocator, c),
+        }
+    }
+
+    return result.toOwnedSlice(allocator);
 }
