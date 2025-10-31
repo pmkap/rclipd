@@ -1,5 +1,9 @@
 const std = @import("std");
+const assert = std.debug.assert;
 const mem = std.mem;
+const allocator = std.heap.c_allocator;
+const posix = std.posix;
+const log = std.log.scoped(.main);
 
 const wayland = @import("wayland");
 const wl = wayland.client.wl;
@@ -30,8 +34,46 @@ pub fn main() anyerror!void {
     const watcher = try Watcher.init(data_control_device);
     defer watcher.deinit();
 
+    var poll_fds = std.ArrayListUnmanaged(posix.pollfd){};
+    defer poll_fds.deinit(allocator);
+
+    const wl_fd = display.getFd();
+
+    // wl_fs is permanently polled, don't remove this
+    try poll_fds.append(allocator, .{
+        .fd = wl_fd,
+        .events = posix.POLL.IN,
+        .revents = 0,
+    });
+
     while (true) {
-        _ = display.dispatch();
+        flush_wayland_and_prepare_read();
+
+        while (watcher.pollable_fds.items.len > 0) {
+            const fd = watcher.pollable_fds.orderedRemove(0);
+            try poll_fds.append(allocator, .{
+                .fd = fd,
+                .events = posix.POLL.IN,
+                .revents = 0,
+            });
+        }
+        _ = try posix.poll(poll_fds.items, -1);
+
+        // wayland
+        assert(poll_fds.items[0].fd == wl_fd);
+        if ((poll_fds.items[0].revents & posix.POLL.IN) != 0) {
+            _ = display.readEvents();
+            _ = display.dispatchPending();
+        } else {
+            display.cancelRead();
+        }
+
+        // watcher
+        // TODO: properly handle and remove the poll fds
+        for (poll_fds.items[1..poll_fds.items.len]) |poll_fd| {
+            try watcher.handleFdRead(poll_fd.fd);
+        }
+        poll_fds.items.len = 1;
     }
 }
 
@@ -46,4 +88,74 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, globals: *
         },
         .global_remove => {},
     }
+}
+
+/// The following function is adapted from https://codeberg.org/ifreund/waylock
+///
+/// Original license:
+/// =============================================================================
+/// Copyright 2022 Isaac Freund
+///
+/// Permission to use, copy, modify, and /or distribute this software for any
+/// purpose with or without fee is hereby granted, provided that the above
+/// copyright notice and this permission notice appear in all copies.
+///
+/// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+/// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+/// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+/// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+/// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE
+/// OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+/// PERFORMANCE OF THIS SOFTWARE.
+/// =============================================================================
+///
+/// This function does the following:
+///  1. Dispatch buffered wayland events to their listener callbacks.
+///  2. Prepare the wayland connection for reading.
+///  3. Send all buffered wayland requests to the server.
+/// After this function has been called, either wl.Display.readEvents() or
+/// wl.Display.cancelRead() read must be called.
+fn flush_wayland_and_prepare_read() void {
+    while (!display.prepareRead()) {
+        const errno = display.dispatchPending();
+        if (errno != .SUCCESS) {
+            fatal("failed to dispatch pending wayland events: E{s}", .{@tagName(errno)});
+        }
+    }
+
+    while (true) {
+        const errno = display.flush();
+        switch (errno) {
+            .SUCCESS => return,
+            .PIPE => {
+                // libwayland uses this error to indicate that the wayland server
+                // closed its side of the wayland socket. We want to continue to
+                // read any buffered messages from the server though as there is
+                // likely a protocol error message we'd like libwayland to log.
+                _ = display.readEvents();
+                fatal("connection to wayland server unexpectedly terminated", .{});
+            },
+            .AGAIN => {
+                // The socket buffer is full, so wait for it to become writable again.
+                var wayland_out = [_]posix.pollfd{.{
+                    .fd = display.getFd(),
+                    .events = posix.POLL.OUT,
+                    .revents = 0,
+                }};
+                _ = posix.poll(&wayland_out, -1) catch |err| {
+                    fatal("poll() failed: {s}", .{@errorName(err)});
+                };
+                // No need to check for POLLHUP/POLLERR here, just fall
+                // through to the next flush() to handle them in one place.
+            },
+            else => {
+                fatal("failed to flush wayland requests: E{s}", .{@tagName(errno)});
+            },
+        }
+    }
+}
+
+fn fatal(comptime format: []const u8, args: anytype) noreturn {
+    log.err(format, args);
+    std.posix.exit(1);
 }
