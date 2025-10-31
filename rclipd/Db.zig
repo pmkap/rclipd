@@ -162,7 +162,7 @@ pub fn deinit(self: Self) void {
     self.conn.close();
 }
 
-pub fn addEntry(self: *Self, blobs: std.ArrayListUnmanaged([]const u8), mimes: std.ArrayListUnmanaged([]const u8)) !void {
+pub fn addEntry(self: *Self, blobs: std.ArrayListUnmanaged(?[]const u8), mimes: std.ArrayListUnmanaged([]const u8)) !void {
     try self.conn.exec("BEGIN IMMEDIATE;", .{});
     errdefer self.conn.exec("ROLLBACK;", .{}) catch {};
     {
@@ -173,13 +173,13 @@ pub fn addEntry(self: *Self, blobs: std.ArrayListUnmanaged([]const u8), mimes: s
         var preview: []const u8 = "no preview";
 
         for (blobs.items, mimes.items) |data, mime| {
-            const hash: i64 = @bitCast(Hash.hash(self.seed, data));
+            const hash: i64 = @bitCast(Hash.hash(self.seed, data.?));
             try blob_hashes.append(allocator, hash);
 
             content_hasher.update(mime);
             content_hasher.update(mem.asBytes(&hash));
             if (std.ascii.startsWithIgnoreCase(mime, "text/plain")) {
-                preview = try generatePreviewAlloc(data);
+                preview = try generatePreviewAlloc(data.?);
             }
         }
         const content_hash: i64 = @bitCast(content_hasher.final());
@@ -194,7 +194,7 @@ pub fn addEntry(self: *Self, blobs: std.ArrayListUnmanaged([]const u8), mimes: s
 
         if (!entry_result.updated) {
             for (blobs.items, blob_hashes.items) |data, hash| {
-                const blob_id = Blob.upsert(self, hash, data) catch |err| {
+                const blob_id = Blob.upsert(self, hash, data.?) catch |err| {
                     log.err("SQLite error when upserting blob{s}: {s}", .{ @errorName(err), self.conn.lastError() });
                     return err;
                 };

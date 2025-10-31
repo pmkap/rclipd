@@ -39,7 +39,7 @@ pub fn main() anyerror!void {
 
     const wl_fd = display.getFd();
 
-    // wl_fs is permanently polled, don't remove this
+    // wl_fd is permanently polled, don't remove this
     try poll_fds.append(allocator, .{
         .fd = wl_fd,
         .events = posix.POLL.IN,

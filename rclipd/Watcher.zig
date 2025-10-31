@@ -13,16 +13,71 @@ const Db = @import("Db.zig");
 
 const Self = @This();
 
-offer: ?*zwlr.DataControlOfferV1,
-mime_types: std.ArrayListUnmanaged([*:0]const u8),
+current_offer: ?*zwlr.DataControlOfferV1,
+current_mimes: std.ArrayListUnmanaged([*:0]const u8),
+
+// These are waiting for completion until all FDs are read out (blobs complete)
+// Then they can be sent to the db and removed
+pending_transfers: std.AutoHashMapUnmanaged(*Transfer, void) = .{},
+
+// This is dispatched by the main loop
+pollable_fds: std.ArrayListUnmanaged(i32) = .{},
+
 db: Db,
+
+const Transfer = struct {
+    mimes: std.ArrayListUnmanaged([]const u8) = .{},
+    fds: std.ArrayListUnmanaged(i32) = .{},
+
+    blobs: std.ArrayListUnmanaged(?[]const u8) = .{},
+
+    pub fn create() !*@This() {
+        const self = try allocator.create(@This());
+        self.* = @This(){};
+        return self;
+    }
+
+    pub fn deinitAndDestroy(self: *@This()) void {
+        for (self.mimes.items) |i| allocator.free(i);
+        for (self.blobs.items) |i| allocator.free(i.?);
+
+        self.mimes.deinit(allocator);
+        self.fds.deinit(allocator);
+        self.blobs.deinit(allocator);
+
+        allocator.destroy(self);
+    }
+
+    pub fn append(self: *@This(), mime: []const u8, fd: i32) !void {
+        try self.mimes.append(allocator, mime);
+        try self.fds.append(allocator, fd);
+        try self.blobs.append(allocator, null);
+    }
+
+    pub fn trySetBlob(self: *@This(), fd: i32, data: []const u8) bool {
+        for (self.fds.items, 0..) |f, i| {
+            if (fd == f) {
+                self.blobs.items[i] = data;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    pub fn isComplete(self: *@This()) bool {
+        for (self.blobs.items) |b| {
+            if (b == null) return false;
+        }
+        return true;
+    }
+};
 
 pub fn init(device: *zwlr.DataControlDeviceV1) !*Self {
     const db = try Db.init();
     const self = try allocator.create(Self);
     self.* = Self{
-        .offer = null,
-        .mime_types = std.ArrayListUnmanaged([*:0]const u8){},
+        .current_offer = null,
+        .current_mimes = std.ArrayListUnmanaged([*:0]const u8){},
         .db = db,
     };
 
@@ -33,7 +88,7 @@ pub fn init(device: *zwlr.DataControlDeviceV1) !*Self {
 
 pub fn deinit(self: *Self) void {
     self.db.deinit();
-    self.mime_types.deinit(allocator);
+    self.current_mimes.deinit(allocator);
     allocator.destroy(self);
 }
 
@@ -41,53 +96,51 @@ fn dataControlListener(device: *zwlr.DataControlDeviceV1, event: zwlr.DataContro
     switch (event) {
         .data_offer => |ev| {
             log.debug("Event received: data offer", .{});
-            assert(self.mime_types.items.len == 0);
-            if (self.offer) |old_offer| {
+            assert(self.current_mimes.items.len == 0);
+            if (self.current_offer) |old_offer| {
                 old_offer.destroy();
             }
-            self.offer = ev.id;
-            self.offer.?.setListener(*Self, dataControlOfferListener, self);
+            self.current_offer = ev.id;
+            self.current_offer.?.setListener(*Self, dataControlOfferListener, self);
         },
         .selection => |ev| {
             log.debug("Event received: selection {any}", .{ev.id});
-            defer self.mime_types.clearRetainingCapacity();
-            defer for (self.mime_types.items) |i| allocator.free(i[0 .. mem.len(i) + 1]);
+            defer self.current_mimes.clearRetainingCapacity();
+            defer for (self.current_mimes.items) |i| allocator.free(i[0 .. mem.len(i) + 1]);
 
             if (ev.id) |offer| {
-                assert(offer == self.offer.?);
+                assert(offer == self.current_offer.?);
 
-                var mimes = std.ArrayListUnmanaged([]const u8){};
-                defer mimes.deinit(allocator);
+                var transfer = Transfer.create() catch return;
+                for (self.current_mimes.items) |mime| {
+                    const fd = requestData(offer, mime) catch return;
+                    log.debug("Data transfer request send for mime {s}", .{mime});
 
-                var blobs = std.ArrayListUnmanaged([]const u8){};
-                defer blobs.deinit(allocator);
-                defer for (blobs.items) |i| allocator.free(i);
+                    const mime_copy = allocator.dupe(u8, mem.span(mime)) catch return;
 
-                for (self.mime_types.items) |mime| {
-                    const content = receiveOfferAlloc(offer, mime) catch return;
-                    log.debug("Received {s} for event {any}", .{ mime, offer });
-                    blobs.append(allocator, content) catch return;
-                    mimes.append(allocator, mem.span(mime)) catch return;
+                    transfer.append(mime_copy, fd) catch return;
                 }
-                self.db.addEntry(blobs, mimes) catch return;
+
+                self.pending_transfers.put(allocator, transfer, {}) catch return;
+                self.pollable_fds.appendSlice(allocator, transfer.fds.items) catch return;
             } else {
-                if (self.offer) |old_offer| {
+                if (self.current_offer) |old_offer| {
                     old_offer.destroy();
-                    self.offer = null;
+                    self.current_offer = null;
                 }
             }
         },
         .primary_selection => |ev| {
             log.debug("Event received: primary selection {any}", .{ev.id});
-            for (self.mime_types.items) |i| allocator.free(i[0 .. mem.len(i) + 1]);
-            self.mime_types.clearRetainingCapacity();
+            for (self.current_mimes.items) |i| allocator.free(i[0 .. mem.len(i) + 1]);
+            self.current_mimes.clearRetainingCapacity();
 
             if (ev.id) |offer| {
-                assert(offer == self.offer.?);
+                assert(offer == self.current_offer.?);
             } else {
-                if (self.offer) |old_offer| {
+                if (self.current_offer) |old_offer| {
                     old_offer.destroy();
-                    self.offer = null;
+                    self.current_offer = null;
                 }
             }
         },
@@ -97,7 +150,7 @@ fn dataControlListener(device: *zwlr.DataControlDeviceV1, event: zwlr.DataContro
     }
 }
 
-/// Watcher/Self owns the returned memory in self.mime_types, careful with the length when freeing
+/// Watcher/Self owns the returned memory in self.current_mimes, careful with the length when freeing
 fn dataControlOfferListener(_: *zwlr.DataControlOfferV1, event: zwlr.DataControlOfferV1.Event, self: *Self) void {
     switch (event) {
         .offer => |ev| {
@@ -108,33 +161,58 @@ fn dataControlOfferListener(_: *zwlr.DataControlOfferV1, event: zwlr.DataControl
             ) catch return;
 
             const result: [*:0]const u8 = @ptrCast(mime_copy.ptr);
-            self.mime_types.append(allocator, result) catch return;
+            self.current_mimes.append(allocator, result) catch return;
         },
     }
 }
 
+pub fn handleFdRead(self: *Self, fd: i32) !void {
+    const data = try readFd(fd);
+
+    var it = self.pending_transfers.keyIterator();
+
+    while (it.next()) |ptr| {
+        const transfer = ptr.*;
+
+        if (transfer.trySetBlob(fd, data)) {
+            if (transfer.isComplete()) {
+                try self.db.addEntry(transfer.blobs, transfer.mimes);
+
+                _ = self.pending_transfers.remove(transfer);
+                transfer.deinitAndDestroy();
+            }
+            break;
+        }
+    }
+}
+
 /// Caller owns the returned memory
-fn receiveOfferAlloc(offer: *zwlr.DataControlOfferV1, mime: [*:0]const u8) ![]u8 {
-    const fd = try std.posix.pipe();
-    const fd_read = fd[0];
-    const fd_write = fd[1];
-
-    offer.receive(mime, fd_write);
-    _ = display.*.flush();
-
-    _ = std.posix.close(fd_write);
+fn readFd(fd: i32) ![]const u8 {
+    defer std.posix.close(fd);
 
     var data = std.ArrayListUnmanaged(u8){};
     defer data.deinit(allocator);
     var buf: [4096]u8 = undefined;
 
     while (true) {
-        const n = try std.posix.read(fd_read, &buf);
+        const n = try std.posix.read(fd, &buf);
         if (n == 0) break;
 
         try data.appendSlice(allocator, buf[0..n]);
     }
 
-    _ = std.posix.close(fd_read);
     return data.toOwnedSlice(allocator);
+}
+
+/// Caller has to close the returned pipe
+fn requestData(offer: *zwlr.DataControlOfferV1, mime: [*:0]const u8) !i32 {
+    const fd = try std.posix.pipe();
+    const fd_read = fd[0];
+    const fd_write = fd[1];
+
+    offer.receive(mime, fd_write);
+
+    _ = std.posix.close(fd_write);
+
+    return fd_read;
 }
