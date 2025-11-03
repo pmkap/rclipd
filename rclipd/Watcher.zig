@@ -8,7 +8,6 @@ const wayland = @import("wayland");
 const wl = wayland.client.wl;
 const zwlr = wayland.client.zwlr;
 
-const display = &@import("main.zig").display;
 const Db = @import("Db.zig");
 
 const Self = @This();
@@ -136,7 +135,6 @@ fn dataControlListener(device: *zwlr.DataControlDeviceV1, event: zwlr.DataContro
             }
         },
         .primary_selection => |ev| {
-            log.debug("Event received: primary selection {any}", .{ev.id});
             for (self.current_mimes.items) |i| self.allocator.free(i[0 .. mem.len(i) + 1]);
             self.current_mimes.clearRetainingCapacity();
 
