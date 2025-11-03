@@ -32,7 +32,7 @@ pub fn main() anyerror!void {
     const data_control_device = try globals.data_control_manager.?.getDataDevice(globals.seat.?);
 
     // Setup all tasks
-    const watcher = try Watcher.init(data_control_device);
+    const watcher = try Watcher.init(allocator, data_control_device);
     defer watcher.deinit();
 
     var ipc = try Ipc.init("/tmp/rclipd.sock");

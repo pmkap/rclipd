@@ -1,6 +1,6 @@
 const std = @import("std");
 const mem = std.mem;
-const allocator = std.heap.c_allocator;
+const Allocator = mem.Allocator;
 const assert = std.debug.assert;
 const log = std.log.scoped(.Watcher);
 
@@ -12,6 +12,8 @@ const display = &@import("main.zig").display;
 const Db = @import("Db.zig");
 
 const Self = @This();
+
+allocator: Allocator,
 
 current_offer: ?*zwlr.DataControlOfferV1,
 current_mimes: std.ArrayListUnmanaged([*:0]const u8),
@@ -26,32 +28,34 @@ pollable_fds: std.ArrayListUnmanaged(i32) = .{},
 db: Db,
 
 const Transfer = struct {
+    allocator: Allocator,
+
     mimes: std.ArrayListUnmanaged([]const u8) = .{},
     fds: std.ArrayListUnmanaged(i32) = .{},
 
     blobs: std.ArrayListUnmanaged(?[]const u8) = .{},
 
-    pub fn create() !*@This() {
+    pub fn create(allocator: Allocator) !*@This() {
         const self = try allocator.create(@This());
-        self.* = @This(){};
+        self.* = @This(){ .allocator = allocator };
         return self;
     }
 
     pub fn deinitAndDestroy(self: *@This()) void {
-        for (self.mimes.items) |i| allocator.free(i);
-        for (self.blobs.items) |i| allocator.free(i.?);
+        for (self.mimes.items) |i| self.allocator.free(i);
+        for (self.blobs.items) |i| self.allocator.free(i.?);
 
-        self.mimes.deinit(allocator);
-        self.fds.deinit(allocator);
-        self.blobs.deinit(allocator);
+        self.mimes.deinit(self.allocator);
+        self.fds.deinit(self.allocator);
+        self.blobs.deinit(self.allocator);
 
-        allocator.destroy(self);
+        self.allocator.destroy(self);
     }
 
     pub fn append(self: *@This(), mime: []const u8, fd: i32) !void {
-        try self.mimes.append(allocator, mime);
-        try self.fds.append(allocator, fd);
-        try self.blobs.append(allocator, null);
+        try self.mimes.append(self.allocator, mime);
+        try self.fds.append(self.allocator, fd);
+        try self.blobs.append(self.allocator, null);
     }
 
     pub fn trySetBlob(self: *@This(), fd: i32, data: []const u8) bool {
@@ -72,10 +76,11 @@ const Transfer = struct {
     }
 };
 
-pub fn init(device: *zwlr.DataControlDeviceV1) !*Self {
+pub fn init(allocator: Allocator, device: *zwlr.DataControlDeviceV1) !*Self {
     const db = try Db.init();
     const self = try allocator.create(Self);
     self.* = Self{
+        .allocator = allocator,
         .current_offer = null,
         .current_mimes = std.ArrayListUnmanaged([*:0]const u8){},
         .db = db,
@@ -88,8 +93,8 @@ pub fn init(device: *zwlr.DataControlDeviceV1) !*Self {
 
 pub fn deinit(self: *Self) void {
     self.db.deinit();
-    self.current_mimes.deinit(allocator);
-    allocator.destroy(self);
+    self.current_mimes.deinit(self.allocator);
+    self.allocator.destroy(self);
 }
 
 fn dataControlListener(device: *zwlr.DataControlDeviceV1, event: zwlr.DataControlDeviceV1.Event, self: *Self) void {
@@ -106,23 +111,23 @@ fn dataControlListener(device: *zwlr.DataControlDeviceV1, event: zwlr.DataContro
         .selection => |ev| {
             log.debug("Event received: selection {any}", .{ev.id});
             defer self.current_mimes.clearRetainingCapacity();
-            defer for (self.current_mimes.items) |i| allocator.free(i[0 .. mem.len(i) + 1]);
+            defer for (self.current_mimes.items) |i| self.allocator.free(i[0 .. mem.len(i) + 1]);
 
             if (ev.id) |offer| {
                 assert(offer == self.current_offer.?);
 
-                var transfer = Transfer.create() catch return;
+                var transfer = Transfer.create(self.allocator) catch return;
                 for (self.current_mimes.items) |mime| {
                     const fd = requestData(offer, mime) catch return;
                     log.debug("Data transfer request send for mime {s}", .{mime});
 
-                    const mime_copy = allocator.dupe(u8, mem.span(mime)) catch return;
+                    const mime_copy = self.allocator.dupe(u8, mem.span(mime)) catch return;
 
                     transfer.append(mime_copy, fd) catch return;
                 }
 
-                self.pending_transfers.put(allocator, transfer, {}) catch return;
-                self.pollable_fds.appendSlice(allocator, transfer.fds.items) catch return;
+                self.pending_transfers.put(self.allocator, transfer, {}) catch return;
+                self.pollable_fds.appendSlice(self.allocator, transfer.fds.items) catch return;
             } else {
                 if (self.current_offer) |old_offer| {
                     old_offer.destroy();
@@ -132,7 +137,7 @@ fn dataControlListener(device: *zwlr.DataControlDeviceV1, event: zwlr.DataContro
         },
         .primary_selection => |ev| {
             log.debug("Event received: primary selection {any}", .{ev.id});
-            for (self.current_mimes.items) |i| allocator.free(i[0 .. mem.len(i) + 1]);
+            for (self.current_mimes.items) |i| self.allocator.free(i[0 .. mem.len(i) + 1]);
             self.current_mimes.clearRetainingCapacity();
 
             if (ev.id) |offer| {
@@ -155,19 +160,19 @@ fn dataControlOfferListener(_: *zwlr.DataControlOfferV1, event: zwlr.DataControl
     switch (event) {
         .offer => |ev| {
             const mime_copy = std.mem.concat(
-                allocator,
+                self.allocator,
                 u8,
                 &.{ mem.span(ev.mime_type), "\x00" },
             ) catch return;
 
             const result: [*:0]const u8 = @ptrCast(mime_copy.ptr);
-            self.current_mimes.append(allocator, result) catch return;
+            self.current_mimes.append(self.allocator, result) catch return;
         },
     }
 }
 
 pub fn handleFdRead(self: *Self, fd: i32) !void {
-    const data = try readFd(fd);
+    const data = try readFd(self.allocator, fd);
 
     var it = self.pending_transfers.keyIterator();
 
@@ -176,7 +181,7 @@ pub fn handleFdRead(self: *Self, fd: i32) !void {
 
         if (transfer.trySetBlob(fd, data)) {
             if (transfer.isComplete()) {
-                try self.db.addEntry(allocator, transfer.blobs, transfer.mimes);
+                try self.db.addEntry(self.allocator, transfer.blobs, transfer.mimes);
 
                 _ = self.pending_transfers.remove(transfer);
                 transfer.deinitAndDestroy();
@@ -187,7 +192,7 @@ pub fn handleFdRead(self: *Self, fd: i32) !void {
 }
 
 /// Caller owns the returned memory
-fn readFd(fd: i32) ![]const u8 {
+fn readFd(allocator: Allocator, fd: i32) ![]const u8 {
     defer std.posix.close(fd);
 
     var data = std.ArrayListUnmanaged(u8){};
