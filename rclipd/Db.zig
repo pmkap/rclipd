@@ -1,7 +1,6 @@
 const std = @import("std");
 const mem = std.mem;
 const assert = std.debug.assert;
-const allocator = std.heap.c_allocator;
 const log = std.log.scoped(.Db);
 const Hash = std.hash.XxHash3;
 
@@ -92,7 +91,7 @@ const Entry = struct {
     /// This creates a table of ids and previews
     /// \n and \t are used as delimiter so it can be used with with a dmenu-like tool
     /// Caller owns the returned memory
-    fn listAlloc(db: Db) ![]const u8 {
+    fn listAlloc(allocator: mem.Allocator, db: Db) ![]const u8 {
         var rows = try db.conn.rows(
             \\SELECT id, preview FROM entry
             \\ORDER BY timestamp DESC;
@@ -163,11 +162,16 @@ pub fn deinit(self: Self) void {
     self.conn.close();
 }
 
-pub fn listAlloc(self: Self) ![]const u8 {
-    return Entry.listAlloc(self);
+pub fn listAlloc(self: Self, allocator: mem.Allocator) ![]const u8 {
+    return Entry.listAlloc(allocator, self);
 }
 
-pub fn addEntry(self: *Self, blobs: std.ArrayListUnmanaged(?[]const u8), mimes: std.ArrayListUnmanaged([]const u8)) !void {
+pub fn addEntry(
+    self: *Self,
+    allocator: mem.Allocator,
+    blobs: std.ArrayListUnmanaged(?[]const u8),
+    mimes: std.ArrayListUnmanaged([]const u8),
+) !void {
     try self.conn.exec("BEGIN IMMEDIATE;", .{});
     errdefer self.conn.exec("ROLLBACK;", .{}) catch {};
     {
@@ -184,7 +188,7 @@ pub fn addEntry(self: *Self, blobs: std.ArrayListUnmanaged(?[]const u8), mimes: 
             content_hasher.update(mime);
             content_hasher.update(mem.asBytes(&hash));
             if (std.ascii.startsWithIgnoreCase(mime, "text/plain")) {
-                preview = try generatePreviewAlloc(data.?); // TODO: cleanup?
+                preview = try generatePreviewAlloc(allocator, data.?); // TODO: cleanup?
             }
         }
         const content_hash: i64 = @bitCast(content_hasher.final());
@@ -218,7 +222,7 @@ pub fn addEntry(self: *Self, blobs: std.ArrayListUnmanaged(?[]const u8), mimes: 
     try self.conn.exec("COMMIT;", .{});
 }
 
-fn generatePreviewAlloc(data: []const u8) ![]const u8 {
+fn generatePreviewAlloc(allocator: mem.Allocator, data: []const u8) ![]const u8 {
     const slice = data[0..@min(data.len, 100)];
 
     var result = std.ArrayListUnmanaged(u8){};

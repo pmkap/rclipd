@@ -52,7 +52,7 @@ pub fn tryAccept(self: *Self) !void {
     log.debug("message: {s}", .{buf});
 
     // TODO: command parser
-    const result = try self.db.listAlloc();
+    const result = try self.db.listAlloc(allocator);
     defer allocator.free(result);
     _ = try posix.write(client_fd, result);
 }

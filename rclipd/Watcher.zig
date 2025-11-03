@@ -176,7 +176,7 @@ pub fn handleFdRead(self: *Self, fd: i32) !void {
 
         if (transfer.trySetBlob(fd, data)) {
             if (transfer.isComplete()) {
-                try self.db.addEntry(transfer.blobs, transfer.mimes);
+                try self.db.addEntry(allocator, transfer.blobs, transfer.mimes);
 
                 _ = self.pending_transfers.remove(transfer);
                 transfer.deinitAndDestroy();
