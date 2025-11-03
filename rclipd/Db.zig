@@ -179,7 +179,9 @@ pub fn addEntry(
         defer blob_hashes.deinit(allocator);
 
         var content_hasher = Hash.init(self.seed);
+
         var preview: []const u8 = "no preview";
+        var preview_allocated = false;
 
         for (blobs.items, mimes.items) |data, mime| {
             const hash: i64 = @bitCast(Hash.hash(self.seed, data.?));
@@ -187,10 +189,14 @@ pub fn addEntry(
 
             content_hasher.update(mime);
             content_hasher.update(mem.asBytes(&hash));
-            if (std.ascii.startsWithIgnoreCase(mime, "text/plain")) {
-                preview = try generatePreviewAlloc(allocator, data.?); // TODO: cleanup?
+
+            if (!preview_allocated and std.ascii.startsWithIgnoreCase(mime, "text/plain")) {
+                preview = try generatePreviewAlloc(allocator, data.?);
+                preview_allocated = true;
             }
         }
+        defer if (preview_allocated) allocator.free(preview);
+
         const content_hash: i64 = @bitCast(content_hasher.final());
 
         const entry_result = Entry.upsert(self, content_hash, preview) catch |err| {
