@@ -10,6 +10,7 @@ const wl = wayland.client.wl;
 const zwlr = wayland.client.zwlr;
 
 const Watcher = @import("Watcher.zig");
+const Ipc = @import("Ipc.zig");
 
 const Globals = struct {
     seat: ?*wl.Seat = null,
@@ -34,6 +35,9 @@ pub fn main() anyerror!void {
     const watcher = try Watcher.init(data_control_device);
     defer watcher.deinit();
 
+    var ipc = try Ipc.init("/tmp/rclipd.sock");
+    defer ipc.deinit();
+
     var poll_fds = std.ArrayListUnmanaged(posix.pollfd){};
     defer poll_fds.deinit(allocator);
 
@@ -46,9 +50,17 @@ pub fn main() anyerror!void {
         .revents = 0,
     });
 
+    // ipc, permanently pulled, don't remove
+    try poll_fds.append(allocator, .{
+        .fd = ipc.fd,
+        .events = posix.POLL.IN,
+        .revents = 0,
+    });
+
     while (true) {
         flush_wayland_and_prepare_read();
 
+        // build poll_fds array
         while (watcher.pollable_fds.items.len > 0) {
             const fd = watcher.pollable_fds.orderedRemove(0);
             try poll_fds.append(allocator, .{
@@ -68,12 +80,18 @@ pub fn main() anyerror!void {
             display.cancelRead();
         }
 
+        // ipc
+        if ((poll_fds.items[1].revents & posix.POLL.IN) != 0) {
+            try ipc.tryAccept();
+        }
+
         // watcher
         // TODO: properly handle and remove the poll fds
-        for (poll_fds.items[1..poll_fds.items.len]) |poll_fd| {
+        for (poll_fds.items[2..poll_fds.items.len]) |poll_fd| {
             try watcher.handleFdRead(poll_fd.fd);
         }
-        poll_fds.items.len = 1;
+
+        poll_fds.items.len = 2;
     }
 }
 
