@@ -120,17 +120,19 @@ const Mime = struct {
             \\    entry_id INTEGER NOT NULL REFERENCES entry(id) ON DELETE CASCADE,
             \\    blob_id INTEGER NOT NULL REFERENCES blob(id),
             \\    name TEXT NOT NULL,
+            \\    priority INTEGER NOT NULL,
             \\    PRIMARY KEY(entry_id, blob_id, name)
             \\);
         , .{});
     }
 
-    fn insert(db: *Db, entry_id: i64, blob_id: i64, name: []const u8) !void {
+    fn insert(db: *Db, entry_id: i64, blob_id: i64, name: []const u8, priority: i64) !void {
         try db.conn.exec(
-            \\INSERT INTO mime (entry_id, blob_id, name)
-            \\VALUES (?, ?, ?)
-            \\ON CONFLICT DO NOTHING;
-        , .{ entry_id, blob_id, name });
+            \\INSERT INTO mime (entry_id, blob_id, name, priority)
+            \\VALUES (?, ?, ?, ?)
+            \\ON CONFLICT(entry_id, blob_id, name)
+            \\DO UPDATE SET priority = excluded.priority;
+        , .{ entry_id, blob_id, name, priority });
         log.debug("mime inserted", .{});
     }
 };
@@ -217,8 +219,8 @@ pub fn addEntry(
             }
 
             assert(mimes.items.len == blob_ids.items.len);
-            for (blob_ids.items, mimes.items) |blob_id, mime| {
-                Mime.insert(self, entry_result.id, blob_id, mime) catch |err| {
+            for (blob_ids.items, mimes.items, 0..) |blob_id, mime, i| {
+                Mime.insert(self, entry_result.id, blob_id, mime, @intCast(i)) catch |err| {
                     log.err("SQLite error when inserting mime {s}: {s}", .{ @errorName(err), self.conn.lastError() });
                     return err;
                 };
