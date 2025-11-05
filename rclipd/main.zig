@@ -60,15 +60,16 @@ pub fn main() anyerror!void {
     while (true) {
         flush_wayland_and_prepare_read();
 
-        // build poll_fds array
-        while (watcher.pollable_fds.items.len > 0) {
-            const fd = watcher.pollable_fds.orderedRemove(0);
+        // build rest of the poll_fds array
+        for (watcher.pollable_fds.items) |fd| {
             try poll_fds.append(allocator, .{
                 .fd = fd,
                 .events = posix.POLL.IN,
                 .revents = 0,
             });
         }
+        watcher.pollable_fds.clearRetainingCapacity();
+
         _ = try posix.poll(poll_fds.items, -1);
 
         // wayland
@@ -86,12 +87,23 @@ pub fn main() anyerror!void {
         }
 
         // watcher
-        // TODO: properly handle and remove the poll fds
-        for (poll_fds.items[2..poll_fds.items.len]) |poll_fd| {
-            try watcher.handleFdRead(poll_fd.fd);
+        var to_remove = std.ArrayListUnmanaged(usize){};
+        defer to_remove.deinit(allocator);
+
+        for (poll_fds.items[2..poll_fds.items.len], 0..) |poll_fd, i| {
+            if ((poll_fd.revents & (posix.POLL.IN | posix.POLL.HUP)) != 0) {
+                const eof = try watcher.handleFdRead(poll_fd.fd);
+                if (eof) {
+                    try to_remove.append(allocator, i + 2);
+                    posix.close(poll_fd.fd);
+                }
+            }
         }
 
-        poll_fds.items.len = 2;
+        while (to_remove.items.len > 0) {
+            const i = to_remove.pop();
+            _ = poll_fds.swapRemove(i.?);
+        }
     }
 }
 

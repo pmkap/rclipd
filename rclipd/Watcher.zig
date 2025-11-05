@@ -5,7 +5,6 @@ const assert = std.debug.assert;
 const log = std.log.scoped(.Watcher);
 
 const wayland = @import("wayland");
-const wl = wayland.client.wl;
 const zwlr = wayland.client.zwlr;
 
 const Db = @import("Db.zig");
@@ -33,6 +32,7 @@ const Transfer = struct {
     fds: std.ArrayListUnmanaged(i32) = .{},
 
     blobs: std.ArrayListUnmanaged(?[]const u8) = .{},
+    blob_complete: std.ArrayListUnmanaged(bool) = .{},
 
     pub fn create(allocator: Allocator) !*@This() {
         const self = try allocator.create(@This());
@@ -47,6 +47,7 @@ const Transfer = struct {
         self.mimes.deinit(self.allocator);
         self.fds.deinit(self.allocator);
         self.blobs.deinit(self.allocator);
+        self.blob_complete.deinit(self.allocator);
 
         self.allocator.destroy(self);
     }
@@ -55,12 +56,22 @@ const Transfer = struct {
         try self.mimes.append(self.allocator, mime);
         try self.fds.append(self.allocator, fd);
         try self.blobs.append(self.allocator, null);
+        try self.blob_complete.append(self.allocator, false);
     }
 
-    pub fn trySetBlob(self: *@This(), fd: i32, data: []const u8) bool {
+    pub fn findAndAppendBlob(self: *@This(), fd: i32, read_result: ReadFdResult) !bool {
         for (self.fds.items, 0..) |f, i| {
             if (fd == f) {
-                self.blobs.items[i] = data;
+                if (self.blobs.items[i]) |current| {
+                    self.blobs.items[i] = try mem.concat(self.allocator, u8, &.{ current, read_result.data });
+                    self.allocator.free(current);
+                    self.allocator.free(read_result.data);
+                } else {
+                    self.blobs.items[i] = read_result.data;
+                }
+                if (read_result.eof) {
+                    self.blob_complete.items[i] = true;
+                }
                 return true;
             }
         }
@@ -68,8 +79,8 @@ const Transfer = struct {
     }
 
     pub fn isComplete(self: *@This()) bool {
-        for (self.blobs.items) |b| {
-            if (b == null) return false;
+        for (self.blob_complete.items) |flag| {
+            if (flag == false) return false;
         }
         return true;
     }
@@ -169,42 +180,60 @@ fn dataControlOfferListener(_: *zwlr.DataControlOfferV1, event: zwlr.DataControl
     }
 }
 
-pub fn handleFdRead(self: *Self, fd: i32) !void {
-    const data = try readFd(self.allocator, fd);
+pub fn handleFdRead(self: *Self, fd: i32) !bool {
+    const read_result = try readFd(self.allocator, fd);
 
     var it = self.pending_transfers.keyIterator();
+    var found_transfer = false;
 
     while (it.next()) |ptr| {
         const transfer = ptr.*;
 
-        if (transfer.trySetBlob(fd, data)) {
+        if (try transfer.findAndAppendBlob(fd, read_result)) {
             if (transfer.isComplete()) {
                 try self.db.addEntry(self.allocator, transfer.blobs, transfer.mimes);
 
                 _ = self.pending_transfers.remove(transfer);
                 transfer.deinitAndDestroy();
             }
+            found_transfer = true;
             break;
         }
     }
+    assert(found_transfer);
+    return read_result.eof;
 }
 
-/// Caller owns the returned memory
-fn readFd(allocator: Allocator, fd: i32) ![]const u8 {
-    defer std.posix.close(fd);
+pub const ReadFdResult = struct {
+    data: []const u8,
+    eof: bool,
+};
 
+/// Caller owns the returned memory in ReadFdResult
+fn readFd(allocator: Allocator, fd: i32) !ReadFdResult {
     var data = std.ArrayListUnmanaged(u8){};
     defer data.deinit(allocator);
+
+    var eof = false;
+
     var buf: [4096]u8 = undefined;
 
     while (true) {
-        const n = try std.posix.read(fd, &buf);
-        if (n == 0) break;
-
+        const n = std.posix.read(fd, &buf) catch |err| switch (err) {
+            error.WouldBlock => break,
+            else => return err,
+        };
+        if (n == 0) {
+            eof = true;
+            break;
+        }
         try data.appendSlice(allocator, buf[0..n]);
     }
 
-    return data.toOwnedSlice(allocator);
+    return ReadFdResult{
+        .data = try data.toOwnedSlice(allocator),
+        .eof = eof,
+    };
 }
 
 /// Caller has to close the returned pipe
