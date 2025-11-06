@@ -135,6 +135,24 @@ const Mime = struct {
         , .{ entry_id, blob_id, name, priority });
         log.debug("mime inserted", .{});
     }
+
+    fn getMimesAlloc(allocator: mem.Allocator, db: Db, entry_id: i64) !std.ArrayListUnmanaged([]const u8) {
+        var rows = try db.conn.rows(
+            \\SELECT name FROM mime
+            \\WHERE entry_id = ?
+            \\ORDER BY priority ASC;
+        , .{entry_id});
+        defer rows.deinit();
+
+        var result = std.ArrayListUnmanaged([]const u8){};
+
+        while (rows.next()) |row| {
+            try result.append(allocator, try allocator.dupe(u8, row.text(0)));
+        }
+        if (rows.err) |err| return err;
+
+        return result;
+    }
 };
 
 pub fn init() !Self {
@@ -166,6 +184,10 @@ pub fn deinit(self: Self) void {
 
 pub fn listAlloc(self: Self, allocator: mem.Allocator) ![]const u8 {
     return Entry.listAlloc(allocator, self);
+}
+
+pub fn getMimesAlloc(self: Self, allocator: mem.Allocator, entry_id: i64) !std.ArrayListUnmanaged([]const u8) {
+    return Mime.getMimesAlloc(allocator, self, entry_id);
 }
 
 pub fn addEntry(
