@@ -28,10 +28,15 @@ const Source = struct {
 
     to_free: std.ArrayListUnmanaged([*:0]const u8) = .{},
 
+    fd_bytes_written: std.AutoHashMapUnmanaged(i32, usize) = .{},
+
     pub fn deinit(self: *@This(), allocator: Allocator) void {
         self.fd_mime_map.deinit(allocator);
+
         for (self.to_free.items) |i| allocator.free(i[0 .. std.mem.span(i).len + 1]);
         self.to_free.deinit(allocator);
+
+        self.fd_bytes_written.deinit(allocator);
 
         self.data_control_source.destroy();
     }
@@ -91,11 +96,8 @@ fn dataControlSourceListener(data_control_source: *zwlr.DataControlSourceV1, eve
             } else unreachable;
 
             const mime_copy = self.allocator.dupe(u8, std.mem.span(ev.mime_type)) catch return; // TODO: free
-            source.fd_mime_map.put(
-                self.allocator,
-                ev.fd,
-                mime_copy,
-            ) catch return;
+            source.fd_mime_map.put(self.allocator, ev.fd, mime_copy) catch return;
+            source.fd_bytes_written.put(self.allocator, ev.fd, 0) catch return;
 
             self.pollable_fds.append(self.allocator, ev.fd) catch return;
         },
@@ -113,8 +115,28 @@ fn dataControlSourceListener(data_control_source: *zwlr.DataControlSourceV1, eve
 }
 
 pub fn handleFdWrite(self: *Self, fd: i32) !bool {
-    _ = self;
-    _ = fd;
-    // This is called from the event loop
-    // get mime type from self.sources' fd_mime_maps, get the respective blob from db and write to fd
+    var mime: []const u8 = undefined;
+    var source = for (self.sources.items) |*s| {
+        if (s.fd_mime_map.get(fd)) |m| {
+            mime = m;
+            break s;
+        }
+    } else unreachable;
+
+    const bytes_written = source.fd_bytes_written.get(fd).?;
+    const data = try self.db.getBlobAlloc(self.allocator, source.entry_id, mime); // TODO: write this on first read and free
+    const remaining = data[bytes_written..];
+
+    const n = std.posix.write(fd, remaining) catch |err| switch (err) {
+        error.WouldBlock => return false,
+        else => return err,
+    };
+
+    source.fd_bytes_written.putAssumeCapacity(fd, bytes_written + n);
+
+    if (bytes_written + n == data.len) {
+        return true;
+    } else {
+        return false;
+    }
 }
