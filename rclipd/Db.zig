@@ -42,6 +42,28 @@ const Blob = struct {
             return id;
         }
     }
+
+    fn getBlobAlloc(allocator: mem.Allocator, db: Db, entry_id: i64, mime: []const u8) ![]u8 {
+        var rows = try db.conn.rows(
+            \\SELECT data FROM blob
+            \\JOIN mime ON blob.id = mime.blob_id
+            \\JOIN entry ON entry.id = mime.entry_id
+            \\WHERE entry.id = ? AND mime.name = ?;
+        , .{ entry_id, mime });
+        defer rows.deinit();
+
+        var result: []u8 = undefined;
+        var count: usize = 0;
+
+        while (rows.next()) |row| {
+            count += 1;
+            result = try allocator.dupe(u8, row.blob(0));
+        }
+        if (rows.err) |err| return err;
+        assert(count == 1);
+
+        return result;
+    }
 };
 
 const Entry = struct {
@@ -188,6 +210,10 @@ pub fn listAlloc(self: Self, allocator: mem.Allocator) ![]const u8 {
 
 pub fn getMimesAlloc(self: Self, allocator: mem.Allocator, entry_id: i64) !std.ArrayListUnmanaged([]const u8) {
     return Mime.getMimesAlloc(allocator, self, entry_id);
+}
+
+pub fn getBlobAlloc(self: Self, allocator: mem.Allocator, entry_id: i64, mime: []const u8) ![]u8 {
+    return Blob.getBlobAlloc(allocator, self, entry_id, mime);
 }
 
 pub fn addEntry(
