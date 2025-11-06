@@ -78,6 +78,16 @@ pub fn main() anyerror!void {
         }
         watcher.pollable_fds.clearRetainingCapacity();
 
+        const offerer_offset = poll_fds.items.len;
+        for (offerer.pollable_fds.items) |fd| {
+            try poll_fds.append(allocator, .{
+                .fd = fd,
+                .events = posix.POLL.OUT,
+                .revents = 0,
+            });
+        }
+        offerer.pollable_fds.clearRetainingCapacity();
+
         _ = try posix.poll(poll_fds.items, -1);
 
         // wayland
@@ -94,16 +104,27 @@ pub fn main() anyerror!void {
             try ipc.tryAccept();
         }
 
-        // watcher
         var to_remove = std.ArrayListUnmanaged(usize){};
         defer to_remove.deinit(allocator);
 
+        // watcher
         for (poll_fds.items[2..poll_fds.items.len], 0..) |poll_fd, i| {
             if ((poll_fd.revents & (posix.POLL.IN | posix.POLL.HUP)) != 0) {
                 const eof = try watcher.handleFdRead(poll_fd.fd);
                 if (eof) {
-                    try to_remove.append(allocator, i + 2);
                     posix.close(poll_fd.fd);
+                    try to_remove.append(allocator, i + 2);
+                }
+            }
+        }
+
+        // offerer
+        for (poll_fds.items[offerer_offset..poll_fds.items.len], 0..) |poll_fd, i| {
+            if ((poll_fd.revents & posix.POLL.OUT) != 0) {
+                const eof = try offerer.handleFdWrite(poll_fd.fd);
+                if (eof) {
+                    posix.close(poll_fd.fd);
+                    try to_remove.append(allocator, i + offerer_offset);
                 }
             }
         }
@@ -112,6 +133,8 @@ pub fn main() anyerror!void {
             const i = to_remove.pop();
             _ = poll_fds.swapRemove(i.?);
         }
+
+        log.debug("event loop continues with {d} FDs", .{poll_fds.items.len});
     }
 }
 
