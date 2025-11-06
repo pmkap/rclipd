@@ -4,14 +4,17 @@ const log = std.log.scoped(.Ipc);
 const allocator = std.heap.c_allocator;
 
 const Db = @import("Db.zig");
+const Offerer = @import("Offerer.zig");
 
 const Self = @This();
 
 server: std.net.Server,
 fd: posix.fd_t,
-db: Db,
 
-pub fn init(path: []const u8) !Self {
+db: Db,
+offerer: *Offerer,
+
+pub fn init(path: []const u8, offerer: *Offerer) !Self {
     _ = std.fs.cwd().deleteFile(path) catch {};
 
     const addr = try std.net.Address.initUnix(path);
@@ -27,6 +30,7 @@ pub fn init(path: []const u8) !Self {
         .server = server,
         .fd = server.stream.handle,
         .db = db,
+        .offerer = offerer,
     };
 }
 
@@ -43,7 +47,7 @@ pub fn tryAccept(self: *Self) !void {
     };
     defer posix.close(client_fd);
 
-    var buf: [256]u8 = undefined;
+    var buf: [64]u8 = undefined;
     const n = posix.read(client_fd, &buf) catch |err| switch (err) {
         error.WouldBlock => return, // no data yet
         else => return err,
@@ -52,7 +56,8 @@ pub fn tryAccept(self: *Self) !void {
     log.debug("message: {s}", .{buf});
 
     // TODO: command parser
-    const result = try self.db.listAlloc(allocator);
-    defer allocator.free(result);
-    _ = try posix.write(client_fd, result);
+    //const result = try self.db.listAlloc(allocator);
+    //defer allocator.free(result);
+    //_ = try posix.write(client_fd, result);
+    try self.offerer.setSource(3);
 }

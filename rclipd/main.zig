@@ -10,6 +10,7 @@ const wl = wayland.client.wl;
 const zwlr = wayland.client.zwlr;
 
 const Watcher = @import("Watcher.zig");
+const Offerer = @import("Offerer.zig");
 const Ipc = @import("Ipc.zig");
 
 const Globals = struct {
@@ -30,12 +31,19 @@ pub fn main() anyerror!void {
     _ = display.roundtrip();
 
     const data_control_device = try globals.data_control_manager.?.getDataDevice(globals.seat.?);
+    defer data_control_device.destroy();
 
     // Setup all tasks
     const watcher = try Watcher.init(allocator, data_control_device);
     defer watcher.deinit();
 
-    var ipc = try Ipc.init("/tmp/rclipd.sock");
+    const offerer = try Offerer.init(
+        allocator,
+        globals.data_control_manager.?,
+        data_control_device,
+    );
+
+    var ipc = try Ipc.init("/tmp/rclipd.sock", offerer);
     defer ipc.deinit();
 
     var poll_fds = std.ArrayListUnmanaged(posix.pollfd){};
