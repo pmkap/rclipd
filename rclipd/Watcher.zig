@@ -168,10 +168,9 @@ fn dataControlListener(device: *zwlr.DataControlDeviceV1, event: zwlr.DataContro
 fn dataControlOfferListener(_: *zwlr.DataControlOfferV1, event: zwlr.DataControlOfferV1.Event, self: *Self) void {
     switch (event) {
         .offer => |ev| {
-            const mime_copy = std.mem.concat(
-                self.allocator,
+            const mime_copy = self.allocator.dupeZ(
                 u8,
-                &.{ mem.span(ev.mime_type), "\x00" },
+                mem.span(ev.mime_type),
             ) catch return;
 
             const result: [*:0]const u8 = @ptrCast(mime_copy.ptr);
