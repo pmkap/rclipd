@@ -24,14 +24,22 @@ pollable_fds: std.ArrayListUnmanaged(i32) = .{},
 const Source = struct {
     data_control_source: *zwlr.DataControlSourceV1,
     entry_id: i64,
+
+    // TODO: make struct to avoid having 3 maps
     fd_mime_map: std.AutoHashMapUnmanaged(i32, []const u8) = .{},
+    fd_data: std.AutoHashMapUnmanaged(i32, []const u8) = .{},
+    fd_bytes_written: std.AutoHashMapUnmanaged(i32, usize) = .{},
 
     to_free: std.ArrayListUnmanaged([*:0]const u8) = .{},
 
-    fd_bytes_written: std.AutoHashMapUnmanaged(i32, usize) = .{},
-
     pub fn deinit(self: *@This(), allocator: Allocator) void {
+        var it = self.fd_mime_map.valueIterator();
+        while (it.next()) |i| allocator.free(i.*);
         self.fd_mime_map.deinit(allocator);
+
+        var it2 = self.fd_data.valueIterator();
+        while (it2.next()) |i| allocator.free(i.*);
+        self.fd_data.deinit(allocator);
 
         for (self.to_free.items) |i| allocator.free(i[0 .. std.mem.span(i).len + 1]);
         self.to_free.deinit(allocator);
@@ -72,8 +80,9 @@ pub fn setSource(self: *Self, entry_id: i64) !void {
     defer for (mimes.items) |m| self.allocator.free(m);
 
     for (mimes.items) |m| {
+        // not sure for how long wayland needs this c_str sent with offer, so duping them here and free later
         const c_str: [*:0]const u8 = @ptrCast(
-            try std.mem.concat(self.allocator, u8, &.{ m, "\x00" }),
+            try self.allocator.dupeZ(u8, m),
         );
         data_control_source.offer(c_str);
         try source.to_free.append(self.allocator, c_str);
@@ -95,7 +104,11 @@ fn dataControlSourceListener(data_control_source: *zwlr.DataControlSourceV1, eve
                 }
             } else unreachable;
 
-            const mime_copy = self.allocator.dupe(u8, std.mem.span(ev.mime_type)) catch return; // TODO: free
+            const mime_copy = self.allocator.dupe(
+                u8,
+                std.mem.span(ev.mime_type),
+            ) catch return;
+
             source.fd_mime_map.put(self.allocator, ev.fd, mime_copy) catch return;
             source.fd_bytes_written.put(self.allocator, ev.fd, 0) catch return;
 
@@ -123,8 +136,13 @@ pub fn handleFdWrite(self: *Self, fd: i32) !bool {
         }
     } else unreachable;
 
+    const get_or_put_result = try source.fd_data.getOrPut(self.allocator, fd);
+    if (!get_or_put_result.found_existing) {
+        get_or_put_result.value_ptr.* = try self.db.getBlobAlloc(self.allocator, source.entry_id, mime);
+    }
+    const data = get_or_put_result.value_ptr.*;
+
     const bytes_written = source.fd_bytes_written.get(fd).?;
-    const data = try self.db.getBlobAlloc(self.allocator, source.entry_id, mime); // TODO: write this on first read and free
     const remaining = data[bytes_written..];
 
     const n = std.posix.write(fd, remaining) catch |err| switch (err) {
@@ -134,9 +152,5 @@ pub fn handleFdWrite(self: *Self, fd: i32) !bool {
 
     source.fd_bytes_written.putAssumeCapacity(fd, bytes_written + n);
 
-    if (bytes_written + n == data.len) {
-        return true;
-    } else {
-        return false;
-    }
+    return bytes_written + n == data.len;
 }
