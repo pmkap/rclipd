@@ -86,7 +86,7 @@ const Transfer = struct {
     }
 };
 
-pub fn init(allocator: Allocator, device: *zwlr.DataControlDeviceV1) !*Self {
+pub fn create(allocator: Allocator, device: *zwlr.DataControlDeviceV1) !*Self {
     const db = try Db.init();
     const self = try allocator.create(Self);
     self.* = Self{
@@ -101,7 +101,7 @@ pub fn init(allocator: Allocator, device: *zwlr.DataControlDeviceV1) !*Self {
     return self;
 }
 
-pub fn deinit(self: *Self) void {
+pub fn destroy(self: *Self) void {
     self.db.deinit();
     self.current_mimes.deinit(self.allocator);
     self.allocator.destroy(self);

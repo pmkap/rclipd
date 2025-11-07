@@ -50,7 +50,7 @@ const Source = struct {
     }
 };
 
-pub fn init(
+pub fn create(
     allocator: Allocator,
     manager: *zwlr.DataControlManagerV1,
     device: *zwlr.DataControlDeviceV1,
@@ -64,6 +64,11 @@ pub fn init(
         .db = db,
     };
     return self;
+}
+
+pub fn destroy(self: *Self) void {
+    self.db.deinit();
+    self.allocator.destroy(self);
 }
 
 pub fn setSource(self: *Self, entry_id: i64) !void {

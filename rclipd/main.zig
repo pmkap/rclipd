@@ -34,14 +34,15 @@ pub fn main() anyerror!void {
     defer data_control_device.destroy();
 
     // Setup all tasks
-    const watcher = try Watcher.init(allocator, data_control_device);
-    defer watcher.deinit();
+    const watcher = try Watcher.create(allocator, data_control_device);
+    defer watcher.destroy();
 
-    const offerer = try Offerer.init(
+    const offerer = try Offerer.create(
         allocator,
         globals.data_control_manager.?,
         data_control_device,
     );
+    defer offerer.destroy();
 
     var ipc = try Ipc.init("/tmp/rclipd.sock", offerer);
     defer ipc.deinit();
