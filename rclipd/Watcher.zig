@@ -104,6 +104,7 @@ pub fn create(allocator: Allocator, device: *zwlr.DataControlDeviceV1) !*Self {
 pub fn destroy(self: *Self) void {
     self.db.deinit();
     self.current_mimes.deinit(self.allocator);
+    self.pending_transfers.deinit(self.allocator);
     self.allocator.destroy(self);
 }
 

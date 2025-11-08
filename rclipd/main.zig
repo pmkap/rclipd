@@ -1,7 +1,6 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const mem = std.mem;
-const allocator = std.heap.c_allocator;
 const posix = std.posix;
 const log = std.log.scoped(.main);
 
@@ -21,6 +20,10 @@ const Globals = struct {
 pub var display: *wl.Display = undefined;
 
 pub fn main() anyerror!void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
+
     var globals = Globals{};
 
     display = try wl.Display.connect(null);
@@ -36,6 +39,7 @@ pub fn main() anyerror!void {
     // Setup all tasks
     const watcher = try Watcher.create(allocator, data_control_device);
     defer watcher.destroy();
+    defer watcher.pollable_fds.deinit(allocator);
 
     const offerer = try Offerer.create(
         allocator,
@@ -43,6 +47,7 @@ pub fn main() anyerror!void {
         data_control_device,
     );
     defer offerer.destroy();
+    defer offerer.pollable_fds.deinit(allocator);
 
     var ipc = try Ipc.init("/tmp/rclipd.sock", offerer);
     defer ipc.deinit();

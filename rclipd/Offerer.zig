@@ -67,6 +67,7 @@ pub fn create(
 }
 
 pub fn destroy(self: *Self) void {
+    self.sources.deinit(self.allocator);
     self.db.deinit();
     self.allocator.destroy(self);
 }
