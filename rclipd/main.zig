@@ -22,7 +22,7 @@ pub var display: *wl.Display = undefined;
 pub fn main() anyerror!void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
-    defer _ = gpa.deinit();
+    //defer _ = gpa.deinit();
 
     var globals = Globals{};
 
@@ -49,7 +49,7 @@ pub fn main() anyerror!void {
     defer offerer.destroy();
     defer offerer.pollable_fds.deinit(allocator);
 
-    var ipc = try Ipc.init("/tmp/rclipd.sock", offerer);
+    var ipc = try Ipc.init(allocator, "/tmp/rclipd.sock", offerer);
     defer ipc.deinit();
 
     var poll_fds = std.ArrayListUnmanaged(posix.pollfd){};

@@ -1,12 +1,15 @@
 const std = @import("std");
 const posix = std.posix;
+const mem = std.mem;
+const Allocator = mem.Allocator;
 const log = std.log.scoped(.Ipc);
-const allocator = std.heap.c_allocator;
 
 const Db = @import("Db.zig");
 const Offerer = @import("Offerer.zig");
 
 const Self = @This();
+
+allocator: Allocator,
 
 server: std.net.Server,
 fd: posix.fd_t,
@@ -14,7 +17,13 @@ fd: posix.fd_t,
 db: Db,
 offerer: *Offerer,
 
-pub fn init(path: []const u8, offerer: *Offerer) !Self {
+const Command = union(enum) {
+    list: void,
+    set: u32,
+    invalid: void,
+};
+
+pub fn init(allocator: Allocator, path: []const u8, offerer: *Offerer) !Self {
     _ = std.fs.cwd().deleteFile(path) catch {};
 
     const addr = try std.net.Address.initUnix(path);
@@ -27,6 +36,7 @@ pub fn init(path: []const u8, offerer: *Offerer) !Self {
     const db = try Db.init();
 
     return Self{
+        .allocator = allocator,
         .server = server,
         .fd = server.stream.handle,
         .db = db,
@@ -53,11 +63,40 @@ pub fn tryAccept(self: *Self) !void {
         else => return err,
     };
     if (n == 0) return; // disconnected
-    log.debug("message: {s}", .{buf});
 
-    // TODO: command parser
-    //const result = try self.db.listAlloc(allocator);
-    //defer allocator.free(result);
-    //_ = try posix.write(client_fd, result);
-    try self.offerer.setSource(3);
+    const msg = buf[0..n];
+    log.debug("message received: \"{s}\"", .{msg});
+
+    switch (parseCommand(msg)) {
+        .list => {
+            const result = try self.db.listAlloc(self.allocator);
+            defer self.allocator.free(result);
+            _ = try posix.write(client_fd, result);
+        },
+        .set => |m| {
+            try self.offerer.setSource(m);
+        },
+        .invalid => {
+            log.debug("failed to parse command \"{s}\"", .{msg});
+        },
+    }
+}
+
+fn parseCommand(msg: []const u8) Command {
+    var it = mem.splitScalar(u8, msg, ' ');
+
+    const first = it.next() orelse return .invalid;
+
+    if (mem.eql(u8, first, "list")) {
+        return .list;
+    }
+
+    const second = it.next() orelse return .invalid;
+
+    if (mem.eql(u8, first, "set")) {
+        const n = std.fmt.parseInt(u32, second, 10) catch return .invalid;
+        return .{ .set = n };
+    }
+
+    return .invalid;
 }
