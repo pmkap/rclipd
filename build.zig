@@ -11,12 +11,15 @@ pub fn build(b: *Build) !void {
 
     const wayland = b.createModule(.{ .root_source_file = scanner.result });
 
-    scanner.addSystemProtocol("/usr/share/qt6/wayland/protocols/wlr-data-control/wlr-data-control-unstable-v1.xml");
+    scanner.addSystemProtocol("staging/ext-data-control/ext-data-control-v1.xml");
+
+    scanner.addCustomProtocol(b.path("protocol/wlr-data-control-unstable-v1.xml"));
 
     // Pass the maximum version implemented by your wayland server or client.
     // Requests, events, enums, etc. from newer versions will not be generated,
     // ensuring forwards compatibility with newer protocol xml.
     scanner.generate("wl_seat", 5);
+    scanner.generate("ext_data_control_manager_v1", 1);
     scanner.generate("zwlr_data_control_manager_v1", 2);
 
     const exe = b.addExecutable(.{
