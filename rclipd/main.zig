@@ -6,15 +6,17 @@ const log = std.log.scoped(.main);
 
 const wayland = @import("wayland");
 const wl = wayland.client.wl;
+const ext = wayland.client.ext;
 const zwlr = wayland.client.zwlr;
 
 const Watcher = @import("watcher.zig").Watcher;
-const Offerer = @import("Offerer.zig");
-const Ipc = @import("Ipc.zig");
+const Offerer = @import("offerer.zig").Offerer;
+const Ipc = @import("ipc.zig").Ipc;
 
 const Globals = struct {
     seat: ?*wl.Seat = null,
-    data_control_manager: ?*zwlr.DataControlManagerV1 = null,
+    zwlr_data_control_manager: ?*zwlr.DataControlManagerV1 = null,
+    ext_data_control_manager: ?*ext.DataControlManagerV1 = null,
 };
 
 pub var display: *wl.Display = undefined;
@@ -33,7 +35,7 @@ pub fn main() anyerror!void {
 
     _ = display.roundtrip();
 
-    const data_control_device = try globals.data_control_manager.?.getDataDevice(globals.seat.?);
+    const data_control_device = try globals.zwlr_data_control_manager.?.getDataDevice(globals.seat.?);
     defer data_control_device.destroy();
 
     // Setup all tasks
@@ -41,15 +43,15 @@ pub fn main() anyerror!void {
     defer watcher.destroy();
     defer watcher.pollable_fds.deinit(allocator);
 
-    const offerer = try Offerer.create(
+    const offerer = try Offerer(zwlr).create(
         allocator,
-        globals.data_control_manager.?,
+        globals.zwlr_data_control_manager.?,
         data_control_device,
     );
     defer offerer.destroy();
     defer offerer.pollable_fds.deinit(allocator);
 
-    var ipc = try Ipc.init(allocator, "/tmp/rclipd.sock", offerer);
+    var ipc = try Ipc(Offerer(zwlr)).init(allocator, "/tmp/rclipd.sock", offerer);
     defer ipc.deinit();
 
     var poll_fds = std.ArrayListUnmanaged(posix.pollfd){};
@@ -150,7 +152,7 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, globals: *
             if (mem.orderZ(u8, global.interface, wl.Seat.interface.name) == .eq) {
                 globals.seat = registry.bind(global.name, wl.Seat, 5) catch return;
             } else if (mem.orderZ(u8, global.interface, zwlr.DataControlManagerV1.interface.name) == .eq) {
-                globals.data_control_manager = registry.bind(global.name, zwlr.DataControlManagerV1, 2) catch return;
+                globals.zwlr_data_control_manager = registry.bind(global.name, zwlr.DataControlManagerV1, 2) catch return;
             }
         },
         .global_remove => {},
