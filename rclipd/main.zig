@@ -8,7 +8,7 @@ const wayland = @import("wayland");
 const wl = wayland.client.wl;
 const zwlr = wayland.client.zwlr;
 
-const Watcher = @import("Watcher.zig");
+const Watcher = @import("watcher.zig").Watcher;
 const Offerer = @import("Offerer.zig");
 const Ipc = @import("Ipc.zig");
 
@@ -37,7 +37,7 @@ pub fn main() anyerror!void {
     defer data_control_device.destroy();
 
     // Setup all tasks
-    const watcher = try Watcher.create(allocator, data_control_device);
+    const watcher = try Watcher(zwlr).create(allocator, data_control_device);
     defer watcher.destroy();
     defer watcher.pollable_fds.deinit(allocator);
 
