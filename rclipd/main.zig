@@ -10,6 +10,7 @@ const ext = wayland.client.ext;
 const zwlr = wayland.client.zwlr;
 
 const EventLoop = @import("event_loop.zig").EventLoop;
+const fatal = @import("utils.zig").fatal;
 
 const Globals = struct {
     seat: ?*wl.Seat = null,
@@ -30,6 +31,24 @@ pub fn main() anyerror!void {
     registry.setListener(*Globals, registryListener, &globals);
 
     _ = display.roundtrip();
+
+    if (globals.ext_data_control_manager) |manager| {
+        try EventLoop(ext).run(
+            allocator,
+            globals.seat.?,
+            manager,
+            display,
+        );
+    } else if (globals.zwlr_data_control_manager) |manager| {
+        try EventLoop(zwlr).run(
+            allocator,
+            globals.seat.?,
+            manager,
+            display,
+        );
+    } else {
+        fatal(.main, "Compositor does not implement ext-data-control or wlr-data-control.", .{});
+    }
 
     try EventLoop(zwlr).run(
         allocator,

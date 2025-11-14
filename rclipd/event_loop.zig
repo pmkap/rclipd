@@ -10,6 +10,7 @@ const wl = wayland.client.wl;
 const Watcher = @import("watcher.zig").Watcher;
 const Offerer = @import("offerer.zig").Offerer;
 const Ipc = @import("ipc.zig").Ipc;
+const fatal = @import("utils.zig").fatal;
 
 pub fn EventLoop(comptime T: type) type {
     return struct {
@@ -161,7 +162,7 @@ fn flush_wayland_and_prepare_read(display: *wl.Display) void {
     while (!display.prepareRead()) {
         const errno = display.dispatchPending();
         if (errno != .SUCCESS) {
-            fatal("failed to dispatch pending wayland events: E{s}", .{@tagName(errno)});
+            fatal(.event_loop, "failed to dispatch pending wayland events: E{s}", .{@tagName(errno)});
         }
     }
 
@@ -175,7 +176,7 @@ fn flush_wayland_and_prepare_read(display: *wl.Display) void {
                 // read any buffered messages from the server though as there is
                 // likely a protocol error message we'd like libwayland to log.
                 _ = display.readEvents();
-                fatal("connection to wayland server unexpectedly terminated", .{});
+                fatal(.event_loop, "connection to wayland server unexpectedly terminated", .{});
             },
             .AGAIN => {
                 // The socket buffer is full, so wait for it to become writable again.
@@ -185,19 +186,14 @@ fn flush_wayland_and_prepare_read(display: *wl.Display) void {
                     .revents = 0,
                 }};
                 _ = posix.poll(&wayland_out, -1) catch |err| {
-                    fatal("poll() failed: {s}", .{@errorName(err)});
+                    fatal(.event_loop, "poll() failed: {s}", .{@errorName(err)});
                 };
                 // No need to check for POLLHUP/POLLERR here, just fall
                 // through to the next flush() to handle them in one place.
             },
             else => {
-                fatal("failed to flush wayland requests: E{s}", .{@tagName(errno)});
+                fatal(.event_loop, "failed to flush wayland requests: E{s}", .{@tagName(errno)});
             },
         }
     }
-}
-
-fn fatal(comptime format: []const u8, args: anytype) noreturn {
-    log.err(format, args);
-    std.posix.exit(1);
 }
