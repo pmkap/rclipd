@@ -241,6 +241,12 @@ pub fn Watcher(comptime T: type) type {
             const fd_read = fd[0];
             const fd_write = fd[1];
 
+            _ = try std.posix.fcntl(
+                fd_read,
+                std.posix.F.SETFL,
+                try std.posix.fcntl(fd_read, std.posix.F.GETFL, 0) | std.posix.SOCK.NONBLOCK,
+            );
+
             offer.receive(mime, fd_write);
 
             _ = std.posix.close(fd_write);
