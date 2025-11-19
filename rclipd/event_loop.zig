@@ -44,24 +44,21 @@ pub fn EventLoop(comptime T: type) type {
 
             const wl_fd = display.getFd();
 
-            // wl_fd is permanently polled, don't remove this
-            try poll_fds.append(allocator, .{
-                .fd = wl_fd,
-                .events = posix.POLL.IN,
-                .revents = 0,
-            });
-
-            // ipc, permanently pulled, don't remove
-            try poll_fds.append(allocator, .{
-                .fd = ipc.fd,
-                .events = posix.POLL.IN,
-                .revents = 0,
-            });
-
             while (true) {
-                flush_wayland_and_prepare_read(display);
+                // build poll_fds array
+                poll_fds.clearRetainingCapacity();
+                try poll_fds.append(allocator, .{
+                    .fd = wl_fd,
+                    .events = posix.POLL.IN,
+                    .revents = 0,
+                });
 
-                // build rest of the poll_fds array
+                try poll_fds.append(allocator, .{
+                    .fd = ipc.fd,
+                    .events = posix.POLL.IN,
+                    .revents = 0,
+                });
+
                 for (watcher.pollable_fds.items) |fd| {
                     try poll_fds.append(allocator, .{
                         .fd = fd,
@@ -81,6 +78,8 @@ pub fn EventLoop(comptime T: type) type {
                 }
                 offerer.pollable_fds.clearRetainingCapacity();
 
+                flush_wayland_and_prepare_read(display);
+
                 _ = try posix.poll(poll_fds.items, -1);
 
                 // wayland
@@ -97,34 +96,34 @@ pub fn EventLoop(comptime T: type) type {
                     try ipc.tryAccept();
                 }
 
-                var to_remove = std.ArrayListUnmanaged(usize){};
-                defer to_remove.deinit(allocator);
-
                 // watcher
-                for (poll_fds.items[2..poll_fds.items.len], 0..) |poll_fd, i| {
+                for (poll_fds.items[2..offerer_offset]) |poll_fd| {
+                    var keep = true;
                     if ((poll_fd.revents & (posix.POLL.IN | posix.POLL.HUP)) != 0) {
                         const eof = try watcher.handleFdRead(poll_fd.fd);
                         if (eof) {
                             posix.close(poll_fd.fd);
-                            try to_remove.append(allocator, i + 2);
+                            keep = false;
                         }
+                    }
+                    if (keep) {
+                        try watcher.pollable_fds.append(allocator, poll_fd.fd);
                     }
                 }
 
                 // offerer
-                for (poll_fds.items[offerer_offset..poll_fds.items.len], 0..) |poll_fd, i| {
-                    if ((poll_fd.revents & posix.POLL.OUT) != 0) {
+                for (poll_fds.items[offerer_offset..poll_fds.items.len]) |poll_fd| {
+                    var keep = true;
+                    if ((poll_fd.revents & (posix.POLL.OUT | posix.POLL.HUP)) != 0) {
                         const eof = try offerer.handleFdWrite(poll_fd.fd);
                         if (eof) {
                             posix.close(poll_fd.fd);
-                            try to_remove.append(allocator, i + offerer_offset);
+                            keep = false;
                         }
                     }
-                }
-
-                while (to_remove.items.len > 0) {
-                    const i = to_remove.pop();
-                    _ = poll_fds.swapRemove(i.?);
+                    if (keep) {
+                        try offerer.pollable_fds.append(allocator, poll_fd.fd);
+                    }
                 }
 
                 log.debug("event loop continues with {d} FDs", .{poll_fds.items.len});

@@ -72,6 +72,7 @@ pub fn Offerer(comptime T: type) type {
         }
 
         pub fn setSource(self: *Self, entry_id: i64) !void {
+            log.debug("set source", .{});
             const data_control_source = try self.manager.createDataSource();
             data_control_source.setListener(*Self, dataControlSourceListener, self);
 
@@ -133,6 +134,8 @@ pub fn Offerer(comptime T: type) type {
         }
 
         pub fn handleFdWrite(self: *Self, fd: i32) !bool {
+            log.debug("handle write", .{});
+
             var mime: []const u8 = undefined;
             var source = for (self.sources.items) |*s| {
                 if (s.fd_mime_map.get(fd)) |m| {
@@ -140,6 +143,7 @@ pub fn Offerer(comptime T: type) type {
                     break s;
                 }
             } else unreachable;
+            log.debug("found source {any} for fd {}, mime {s}", .{ source.entry_id, fd, mime });
 
             const get_or_put_result = try source.fd_data.getOrPut(self.allocator, fd);
             if (!get_or_put_result.found_existing) {
@@ -149,15 +153,33 @@ pub fn Offerer(comptime T: type) type {
 
             const bytes_written = source.fd_bytes_written.get(fd).?;
             const remaining = data[bytes_written..];
+            const chunk = if (remaining.len > 4096)
+                remaining[0..4096]
+            else
+                remaining;
 
-            const n = std.posix.write(fd, remaining) catch |err| switch (err) {
-                error.WouldBlock => return false,
+            const n = std.posix.write(fd, chunk) catch |err| switch (err) {
+                error.WouldBlock => {
+                    log.debug("WouldBLock", .{});
+                    return false;
+                },
+                error.BrokenPipe => {
+                    log.debug("BrokenPipe", .{});
+                    _ = source.fd_bytes_written.remove(fd);
+                    return true;
+                },
                 else => return err,
             };
 
-            source.fd_bytes_written.putAssumeCapacity(fd, bytes_written + n);
+            if (n == 0 or bytes_written + n == data.len) {
+                _ = source.fd_bytes_written.remove(fd);
+                log.debug("EOF", .{});
+                return true;
+            }
 
-            return bytes_written + n == data.len;
+            source.fd_bytes_written.putAssumeCapacity(fd, bytes_written + n);
+            log.debug("bytes_written = {d}", .{source.fd_bytes_written.get(fd).?});
+            return false;
         }
     };
 }

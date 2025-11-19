@@ -218,6 +218,7 @@ pub fn Watcher(comptime T: type) type {
             var buf: [4096]u8 = undefined;
 
             while (true) {
+                log.debug("reading", .{});
                 const n = std.posix.read(fd, &buf) catch |err| switch (err) {
                     error.WouldBlock => break,
                     else => return err,
