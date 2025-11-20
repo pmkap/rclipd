@@ -49,34 +49,64 @@ pub fn Ipc(comptime T: type) type {
             self.server.deinit();
         }
 
-        pub fn tryAccept(self: *Self) !void {
+        pub fn accept(self: *Self) void {
             var addr: posix.sockaddr = undefined;
             var addr_len: posix.socklen_t = @sizeOf(posix.sockaddr);
+
             const client_fd = posix.accept(self.fd, &addr, &addr_len, 0) catch |err| switch (err) {
-                error.WouldBlock => return, // nothing pending
-                else => return err,
+                error.WouldBlock => return,
+                else => {
+                    log.err("accept connection error: {}", .{err});
+                    return;
+                },
             };
             defer posix.close(client_fd);
 
             var buf: [64]u8 = undefined;
             const n = posix.read(client_fd, &buf) catch |err| switch (err) {
-                error.WouldBlock => return, // no data yet
-                else => return err,
+                error.WouldBlock => {
+                    log.warn("client connected but no data sent immediately, dropping", .{});
+                    return;
+                },
+                else => {
+                    log.err("read error: {}", .{err});
+                    return;
+                },
             };
-            if (n == 0) return; // disconnected
+            if (n == 0) return;
 
             const msg = buf[0..n];
             log.debug("message received: \"{s}\"", .{msg});
 
             switch (parseCommand(msg)) {
                 .list => {
-                    const result = try self.db.listAlloc(self.allocator);
+                    const result = self.db.listAlloc(self.allocator) catch |err| {
+                        log.err("db connection error: {}", .{err});
+                        return;
+                    };
                     defer self.allocator.free(result);
-                    // TODO: write in a loop here
-                    _ = try posix.write(client_fd, result);
+
+                    var written: usize = 0;
+                    while (written < result.len) {
+                        const m = posix.write(client_fd, result[written..]) catch |err| switch (err) {
+                            error.WouldBlock => {
+                                log.warn("client not ready, response truncated", .{});
+                                break;
+                            },
+                            else => {
+                                log.err("write error: {}", .{err});
+                                return;
+                            },
+                        };
+                        if (m == 0) break;
+                        written += m;
+                    }
                 },
                 .set => |m| {
-                    try self.offerer.setSource(m);
+                    self.offerer.setSource(m) catch |err| {
+                        log.err("error setting clipboard source: {}", .{err});
+                        return;
+                    };
                 },
                 .invalid => {
                     log.debug("failed to parse command \"{s}\"", .{msg});

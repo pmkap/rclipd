@@ -80,6 +80,8 @@ pub fn EventLoop(comptime T: type) type {
                     });
                 }
 
+                log.debug("event loop continues with {d} FDs", .{poll_fds.items.len});
+
                 flush_wayland_and_prepare_read(display);
 
                 _ = try posix.poll(poll_fds.items, -1);
@@ -94,7 +96,7 @@ pub fn EventLoop(comptime T: type) type {
 
                 // ipc
                 if (poll_fds.items[1].revents & revents_in != 0) {
-                    try ipc.tryAccept();
+                    ipc.accept();
                 }
 
                 // watcher
@@ -110,8 +112,6 @@ pub fn EventLoop(comptime T: type) type {
                         try offerer.handleFdWrite(poll_fd.fd);
                     }
                 }
-
-                log.debug("event loop continues with {d} FDs", .{poll_fds.items.len});
             }
         }
     };
