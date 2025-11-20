@@ -1,0 +1,19 @@
+#!/bin/sh
+# example usage
+# rclipctl list | fuzzel -dw 100 --with-nth 2 --accept-nth 1 | rclipctl set
+
+SOCKET=/tmp/rclipd.sock
+
+if [ -p /dev/stdin ] || [ ! -t 0 ]; then
+    STDIN=$(cat)
+fi
+
+if [ "$1" = "list" ]; then
+    echo -n list | socat - "$SOCKET"
+elif [ "$1" = "set" ]; then
+    if [ -n "$STDIN" ]; then
+        echo -n set "$STDIN" | socat - "$SOCKET"
+    else
+        echo -n set "$2" | socat - "$SOCKET"
+    fi
+fi
