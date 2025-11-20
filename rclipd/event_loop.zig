@@ -26,7 +26,6 @@ pub fn EventLoop(comptime T: type) type {
             // Setup all tasks
             const watcher = try Watcher(T).create(allocator, data_control_device);
             defer watcher.destroy();
-            defer watcher.pollable_fds.deinit(allocator);
 
             const offerer = try Offerer(T).create(
                 allocator,
@@ -66,7 +65,6 @@ pub fn EventLoop(comptime T: type) type {
                         .revents = 0,
                     });
                 }
-                watcher.pollable_fds.clearRetainingCapacity();
 
                 const offerer_offset = poll_fds.items.len;
                 for (offerer.pollable_fds.items) |fd| {
@@ -98,16 +96,8 @@ pub fn EventLoop(comptime T: type) type {
 
                 // watcher
                 for (poll_fds.items[2..offerer_offset]) |poll_fd| {
-                    var keep = true;
                     if ((poll_fd.revents & (posix.POLL.IN | posix.POLL.HUP)) != 0) {
-                        const eof = try watcher.handleFdRead(poll_fd.fd);
-                        if (eof) {
-                            posix.close(poll_fd.fd);
-                            keep = false;
-                        }
-                    }
-                    if (keep) {
-                        try watcher.pollable_fds.append(allocator, poll_fd.fd);
+                        try watcher.handleFdRead(poll_fd.fd);
                     }
                 }
 

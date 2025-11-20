@@ -19,7 +19,7 @@ pub fn Watcher(comptime T: type) type {
         // Then they can be sent to the db and removed
         pending_transfers: std.AutoHashMapUnmanaged(*Transfer, void) = .{},
 
-        // This is dispatched by the main loop
+        // This is used by the main loop re-create the pollfds on every iteration
         pollable_fds: std.ArrayListUnmanaged(i32) = .{},
 
         db: Db,
@@ -58,19 +58,20 @@ pub fn Watcher(comptime T: type) type {
                 try self.blob_complete.append(self.allocator, false);
             }
 
-            pub fn findAndAppendBlob(self: *@This(), fd: i32, read_result: ReadFdResult) !bool {
+            /// Appends to blob
+            /// If a blob was found it returns true, otherwise false
+            pub fn findAndAppendBlob(self: *@This(), fd: i32, chunk: []const u8) !bool {
                 for (self.fds.items, 0..) |f, i| {
                     if (fd == f) {
+                        if (chunk.len == 0) self.blob_complete.items[i] = true;
+
                         if (self.blobs.items[i]) |current| {
-                            self.blobs.items[i] = try mem.concat(self.allocator, u8, &.{ current, read_result.data });
+                            self.blobs.items[i] = try mem.concat(self.allocator, u8, &.{ current, chunk });
                             self.allocator.free(current);
-                            self.allocator.free(read_result.data);
                         } else {
-                            self.blobs.items[i] = read_result.data;
+                            self.blobs.items[i] = try self.allocator.dupe(u8, chunk);
                         }
-                        if (read_result.eof) {
-                            self.blob_complete.items[i] = true;
-                        }
+
                         return true;
                     }
                 }
@@ -103,6 +104,7 @@ pub fn Watcher(comptime T: type) type {
         pub fn destroy(self: *Self) void {
             self.db.deinit();
             self.current_mimes.deinit(self.allocator);
+            self.pollable_fds.deinit(self.allocator);
             self.pending_transfers.deinit(self.allocator);
             self.allocator.destroy(self);
         }
@@ -179,8 +181,17 @@ pub fn Watcher(comptime T: type) type {
             }
         }
 
-        pub fn handleFdRead(self: *Self, fd: i32) !bool {
-            const read_result = try readFd(self.allocator, fd);
+        pub fn handleFdRead(self: *Self, fd: i32) !void {
+            var buf: [4096]u8 = undefined;
+
+            log.debug("reading from fd {d}", .{fd});
+            const n = std.posix.read(fd, &buf) catch |err| switch (err) {
+                error.WouldBlock => return,
+                else => return err,
+            };
+
+            const buf_written = buf[0..n];
+            const eof = if (n == 0) true else false;
 
             var it = self.pending_transfers.keyIterator();
             var found_transfer = false;
@@ -188,53 +199,28 @@ pub fn Watcher(comptime T: type) type {
             while (it.next()) |ptr| {
                 const transfer = ptr.*;
 
-                if (try transfer.findAndAppendBlob(fd, read_result)) {
+                if (try transfer.findAndAppendBlob(fd, buf_written)) {
                     if (transfer.isComplete()) {
                         try self.db.addEntry(self.allocator, transfer.blobs, transfer.mimes);
 
                         _ = self.pending_transfers.remove(transfer);
                         transfer.deinitAndDestroy();
                     }
+
+                    if (eof) {
+                        const i = for (self.pollable_fds.items, 0..) |f, i| {
+                            if (f == fd) break i;
+                        } else unreachable;
+                        _ = self.pollable_fds.orderedRemove(i);
+
+                        std.posix.close(fd);
+                    }
+
                     found_transfer = true;
                     break;
                 }
             }
             assert(found_transfer);
-            return read_result.eof;
-        }
-
-        pub const ReadFdResult = struct {
-            data: []const u8,
-            eof: bool,
-        };
-
-        /// Caller owns the returned memory in ReadFdResult
-        fn readFd(allocator: Allocator, fd: i32) !ReadFdResult {
-            var data = std.ArrayListUnmanaged(u8){};
-            defer data.deinit(allocator);
-
-            var eof = false;
-
-            var buf: [4096]u8 = undefined;
-
-            // TODO: only read one chunk and return to main loop
-            while (true) {
-                log.debug("reading", .{});
-                const n = std.posix.read(fd, &buf) catch |err| switch (err) {
-                    error.WouldBlock => break,
-                    else => return err,
-                };
-                if (n == 0) {
-                    eof = true;
-                    break;
-                }
-                try data.appendSlice(allocator, buf[0..n]);
-            }
-
-            return ReadFdResult{
-                .data = try data.toOwnedSlice(allocator),
-                .eof = eof,
-            };
         }
 
         /// Caller has to close the returned pipe
