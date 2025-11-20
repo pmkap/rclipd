@@ -217,6 +217,7 @@ pub fn Watcher(comptime T: type) type {
 
             var buf: [4096]u8 = undefined;
 
+            // TODO: only read one chunk and return to main loop
             while (true) {
                 log.debug("reading", .{});
                 const n = std.posix.read(fd, &buf) catch |err| switch (err) {

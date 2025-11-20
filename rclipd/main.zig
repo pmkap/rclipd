@@ -1,7 +1,6 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const mem = std.mem;
-const posix = std.posix;
 const log = std.log.scoped(.main);
 
 const wayland = @import("wayland");
@@ -49,13 +48,6 @@ pub fn main() anyerror!void {
     } else {
         fatal(.main, "Compositor does not implement ext-data-control or wlr-data-control.", .{});
     }
-
-    try EventLoop(zwlr).run(
-        allocator,
-        globals.seat.?,
-        globals.zwlr_data_control_manager.?,
-        display,
-    );
 }
 
 fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, globals: *Globals) void {

@@ -72,6 +72,7 @@ pub fn Ipc(comptime T: type) type {
                 .list => {
                     const result = try self.db.listAlloc(self.allocator);
                     defer self.allocator.free(result);
+                    // TODO: write in a loop here
                     _ = try posix.write(client_fd, result);
                 },
                 .set => |m| {
