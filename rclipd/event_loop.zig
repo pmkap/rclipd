@@ -45,21 +45,23 @@ pub fn EventLoop(comptime T: type) type {
             const revents_in = posix.POLL.IN | posix.POLL.HUP | posix.POLL.ERR;
             const revents_out = posix.POLL.OUT | posix.POLL.HUP | posix.POLL.ERR;
 
+            // wayland socket, do not remove
+            try poll_fds.append(allocator, .{
+                .fd = wl_fd,
+                .events = posix.POLL.IN,
+                .revents = 0,
+            });
+
+            // IPC socket, do not remove
+            try poll_fds.append(allocator, .{
+                .fd = ipc.fd,
+                .events = posix.POLL.IN,
+                .revents = 0,
+            });
+
             while (true) {
-                // build poll_fds array
-                poll_fds.clearRetainingCapacity();
-
-                try poll_fds.append(allocator, .{
-                    .fd = wl_fd,
-                    .events = posix.POLL.IN,
-                    .revents = 0,
-                });
-
-                try poll_fds.append(allocator, .{
-                    .fd = ipc.fd,
-                    .events = posix.POLL.IN,
-                    .revents = 0,
-                });
+                // build remaining poll_fds array
+                poll_fds.shrinkRetainingCapacity(2);
 
                 for (watcher.pollable_fds.items) |fd| {
                     try poll_fds.append(allocator, .{
