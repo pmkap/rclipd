@@ -33,7 +33,6 @@ pub fn EventLoop(comptime T: type) type {
                 data_control_device,
             );
             defer offerer.destroy();
-            defer offerer.pollable_fds.deinit(allocator);
 
             var ipc = try Ipc(Offerer(T)).init(allocator, "/tmp/rclipd.sock", offerer);
             defer ipc.deinit();
@@ -46,6 +45,7 @@ pub fn EventLoop(comptime T: type) type {
             while (true) {
                 // build poll_fds array
                 poll_fds.clearRetainingCapacity();
+
                 try poll_fds.append(allocator, .{
                     .fd = wl_fd,
                     .events = posix.POLL.IN,
@@ -74,14 +74,12 @@ pub fn EventLoop(comptime T: type) type {
                         .revents = 0,
                     });
                 }
-                offerer.pollable_fds.clearRetainingCapacity();
 
                 flush_wayland_and_prepare_read(display);
 
                 _ = try posix.poll(poll_fds.items, -1);
 
                 // wayland
-                assert(poll_fds.items[0].fd == wl_fd);
                 if ((poll_fds.items[0].revents & posix.POLL.IN) != 0) {
                     _ = display.readEvents();
                     _ = display.dispatchPending();
@@ -103,16 +101,8 @@ pub fn EventLoop(comptime T: type) type {
 
                 // offerer
                 for (poll_fds.items[offerer_offset..poll_fds.items.len]) |poll_fd| {
-                    var keep = true;
                     if ((poll_fd.revents & (posix.POLL.OUT | posix.POLL.HUP)) != 0) {
-                        const eof = try offerer.handleFdWrite(poll_fd.fd);
-                        if (eof) {
-                            posix.close(poll_fd.fd);
-                            keep = false;
-                        }
-                    }
-                    if (keep) {
-                        try offerer.pollable_fds.append(allocator, poll_fd.fd);
+                        try offerer.handleFdWrite(poll_fd.fd);
                     }
                 }
 

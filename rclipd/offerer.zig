@@ -17,7 +17,7 @@ pub fn Offerer(comptime T: type) type {
 
         db: Db,
 
-        // This is dispatched by the main loop
+        // This is used by the main loop re-create the pollfds on every iteration
         pollable_fds: std.ArrayListUnmanaged(i32) = .{},
 
         const Source = struct {
@@ -67,6 +67,7 @@ pub fn Offerer(comptime T: type) type {
 
         pub fn destroy(self: *Self) void {
             self.sources.deinit(self.allocator);
+            self.pollable_fds.deinit(self.allocator);
             self.db.deinit();
             self.allocator.destroy(self);
         }
@@ -133,7 +134,8 @@ pub fn Offerer(comptime T: type) type {
             }
         }
 
-        pub fn handleFdWrite(self: *Self, fd: i32) !bool {
+        pub fn handleFdWrite(self: *Self, fd: i32) !void {
+            const chunk_size = 4096;
             log.debug("handle write", .{});
 
             var mime: []const u8 = undefined;
@@ -153,33 +155,37 @@ pub fn Offerer(comptime T: type) type {
 
             const bytes_written = source.fd_bytes_written.get(fd).?;
             const remaining = data[bytes_written..];
-            const chunk = if (remaining.len > 4096)
-                remaining[0..4096]
+            const chunk = if (remaining.len > chunk_size)
+                remaining[0..chunk_size]
             else
                 remaining;
 
             const n = std.posix.write(fd, chunk) catch |err| switch (err) {
                 error.WouldBlock => {
                     log.debug("WouldBLock", .{});
-                    return false;
-                },
-                error.BrokenPipe => {
-                    log.debug("BrokenPipe", .{});
-                    _ = source.fd_bytes_written.remove(fd);
-                    return true;
+                    return;
                 },
                 else => return err,
             };
 
-            if (n == 0 or bytes_written + n == data.len) {
-                _ = source.fd_bytes_written.remove(fd);
-                log.debug("EOF", .{});
-                return true;
-            }
+            const bytes_written_new = bytes_written + n;
+            log.debug("total bytes written: {d}", .{bytes_written_new});
+            source.fd_bytes_written.putAssumeCapacity(fd, bytes_written_new);
 
-            source.fd_bytes_written.putAssumeCapacity(fd, bytes_written + n);
-            log.debug("bytes_written = {d}", .{source.fd_bytes_written.get(fd).?});
-            return false;
+            if (n == 0 or bytes_written_new == data.len) {
+                log.debug("fd {d} EOF", .{fd});
+
+                const i = for (self.pollable_fds.items, 0..) |f, i| {
+                    if (f == fd) break i;
+                } else unreachable;
+                _ = self.pollable_fds.orderedRemove(i);
+
+                std.posix.close(fd);
+
+                _ = source.fd_data.remove(fd);
+                _ = source.fd_mime_map.remove(fd);
+                _ = source.fd_bytes_written.remove(fd);
+            }
         }
     };
 }
