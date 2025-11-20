@@ -42,6 +42,9 @@ pub fn EventLoop(comptime T: type) type {
 
             const wl_fd = display.getFd();
 
+            const revents_in = posix.POLL.IN | posix.POLL.HUP | posix.POLL.ERR;
+            const revents_out = posix.POLL.OUT | posix.POLL.HUP | posix.POLL.ERR;
+
             while (true) {
                 // build poll_fds array
                 poll_fds.clearRetainingCapacity();
@@ -80,7 +83,7 @@ pub fn EventLoop(comptime T: type) type {
                 _ = try posix.poll(poll_fds.items, -1);
 
                 // wayland
-                if ((poll_fds.items[0].revents & posix.POLL.IN) != 0) {
+                if (poll_fds.items[0].revents & revents_in != 0) {
                     _ = display.readEvents();
                     _ = display.dispatchPending();
                 } else {
@@ -88,20 +91,20 @@ pub fn EventLoop(comptime T: type) type {
                 }
 
                 // ipc
-                if ((poll_fds.items[1].revents & posix.POLL.IN) != 0) {
+                if (poll_fds.items[1].revents & revents_in != 0) {
                     try ipc.tryAccept();
                 }
 
                 // watcher
                 for (poll_fds.items[2..offerer_offset]) |poll_fd| {
-                    if ((poll_fd.revents & (posix.POLL.IN | posix.POLL.HUP)) != 0) {
+                    if (poll_fd.revents & revents_in != 0) {
                         try watcher.handleFdRead(poll_fd.fd);
                     }
                 }
 
                 // offerer
                 for (poll_fds.items[offerer_offset..poll_fds.items.len]) |poll_fd| {
-                    if ((poll_fd.revents & (posix.POLL.OUT | posix.POLL.HUP)) != 0) {
+                    if (poll_fd.revents & revents_out != 0) {
                         try offerer.handleFdWrite(poll_fd.fd);
                     }
                 }
