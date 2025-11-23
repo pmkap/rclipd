@@ -9,6 +9,8 @@ const ext = wayland.client.ext;
 const zwlr = wayland.client.zwlr;
 
 const EventLoop = @import("event_loop.zig").EventLoop;
+const Config = @import("Config.zig");
+
 const fatal = @import("utils.zig").fatal;
 
 const Globals = struct {
@@ -17,10 +19,14 @@ const Globals = struct {
     ext_data_control_manager: ?*ext.DataControlManagerV1 = null,
 };
 
+pub var config: Config = undefined;
+
 pub fn main() anyerror!void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
     //defer _ = gpa.deinit();
+
+    config = try Config.init(allocator);
 
     var globals = Globals{};
 

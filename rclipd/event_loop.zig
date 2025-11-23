@@ -11,6 +11,7 @@ const Watcher = @import("watcher.zig").Watcher;
 const Offerer = @import("offerer.zig").Offerer;
 const Ipc = @import("ipc.zig").Ipc;
 const fatal = @import("utils.zig").fatal;
+const config = &@import("main.zig").config;
 
 const EventType = enum { wl, ipc, watcher, offerer };
 
@@ -32,7 +33,7 @@ pub fn EventLoop(comptime T: type) type {
             const offerer = try Offerer(T).create(allocator, manager, data_control_device);
             defer offerer.destroy();
 
-            var ipc = try Ipc(Offerer(T)).init(allocator, "/tmp/rclipd.sock", offerer);
+            var ipc = try Ipc(Offerer(T)).init(allocator, config.socket_path, offerer);
             defer ipc.deinit();
 
             var poll_fds = std.ArrayListUnmanaged(posix.pollfd){};

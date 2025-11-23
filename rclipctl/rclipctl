@@ -2,7 +2,7 @@
 # example usage
 # rclipctl list | fuzzel -dw 100 --with-nth 2 --accept-nth 1 | rclipctl set
 
-SOCKET=/tmp/rclipd.sock
+SOCKET=$XDG_RUNTIME_DIR/rclipd.sock
 
 if [ -p /dev/stdin ] || [ ! -t 0 ]; then
     STDIN=$(cat)

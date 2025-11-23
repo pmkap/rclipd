@@ -34,7 +34,7 @@ pub fn Ipc(comptime T: type) type {
 
             log.debug("listening on {s}", .{path});
 
-            const db = try Db.init();
+            const db = try Db.init(allocator);
 
             return Self{
                 .allocator = allocator,

@@ -54,7 +54,7 @@ pub fn Offerer(comptime T: type) type {
             manager: *T.DataControlManagerV1,
             device: *T.DataControlDeviceV1,
         ) !*Self {
-            const db = try Db.init();
+            const db = try Db.init(allocator);
             const self = try allocator.create(Self);
             self.* = Self{
                 .allocator = allocator,

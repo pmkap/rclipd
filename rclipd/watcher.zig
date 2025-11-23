@@ -87,7 +87,7 @@ pub fn Watcher(comptime T: type) type {
         };
 
         pub fn create(allocator: Allocator, device: *T.DataControlDeviceV1) !*Self {
-            const db = try Db.init();
+            const db = try Db.init(allocator);
             const self = try allocator.create(Self);
             self.* = Self{
                 .allocator = allocator,

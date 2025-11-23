@@ -8,6 +8,7 @@ const zqlite = @import("zqlite");
 
 const Self = @This();
 const Db = @This();
+const config = &@import("main.zig").config;
 
 conn: zqlite.Conn,
 seed: u32 = 42,
@@ -177,13 +178,14 @@ const Mime = struct {
     }
 };
 
-pub fn init() !Self {
-    _ = std.c.umask(0o077);
-
+pub fn init(allocator: mem.Allocator) !Self {
     // good idea to pass EXResCode to get extended result codes (more detailed error codes)
     const flags = zqlite.OpenFlags.Create | zqlite.OpenFlags.EXResCode;
 
-    var conn = try zqlite.open("/tmp/rclipd.db", flags);
+    const path = try allocator.dupeZ(u8, config.db_path);
+    defer allocator.free(path);
+
+    var conn = try zqlite.open(path, flags);
     var self = Self{ .conn = conn };
 
     try conn.exec("PRAGMA foreign_keys = ON;", .{});
