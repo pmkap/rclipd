@@ -12,6 +12,8 @@ const Offerer = @import("offerer.zig").Offerer;
 const Ipc = @import("ipc.zig").Ipc;
 const fatal = @import("utils.zig").fatal;
 
+const EventType = enum { wl, ipc, watcher, offerer };
+
 pub fn EventLoop(comptime T: type) type {
     return struct {
         pub fn run(
@@ -27,41 +29,42 @@ pub fn EventLoop(comptime T: type) type {
             const watcher = try Watcher(T).create(allocator, data_control_device);
             defer watcher.destroy();
 
-            const offerer = try Offerer(T).create(
-                allocator,
-                manager,
-                data_control_device,
-            );
+            const offerer = try Offerer(T).create(allocator, manager, data_control_device);
             defer offerer.destroy();
 
             var ipc = try Ipc(Offerer(T)).init(allocator, "/tmp/rclipd.sock", offerer);
             defer ipc.deinit();
 
             var poll_fds = std.ArrayListUnmanaged(posix.pollfd){};
+            var poll_events = std.ArrayListUnmanaged(EventType){};
             defer poll_fds.deinit(allocator);
+            defer poll_events.deinit(allocator);
 
             const wl_fd = display.getFd();
 
             const revents_in = posix.POLL.IN | posix.POLL.HUP | posix.POLL.ERR;
             const revents_out = posix.POLL.OUT | posix.POLL.HUP | posix.POLL.ERR;
 
-            // wayland socket, do not remove
+            // wayland socket at index 0, do not remove
             try poll_fds.append(allocator, .{
                 .fd = wl_fd,
                 .events = posix.POLL.IN,
                 .revents = 0,
             });
+            try poll_events.append(allocator, .wl);
 
-            // IPC socket, do not remove
+            // IPC socket at index 1, do not remove
             try poll_fds.append(allocator, .{
                 .fd = ipc.fd,
                 .events = posix.POLL.IN,
                 .revents = 0,
             });
+            try poll_events.append(allocator, .ipc);
 
             while (true) {
                 // build remaining poll_fds array
                 poll_fds.shrinkRetainingCapacity(2);
+                poll_events.shrinkRetainingCapacity(2);
 
                 for (watcher.pollable_fds.items) |fd| {
                     try poll_fds.append(allocator, .{
@@ -69,16 +72,19 @@ pub fn EventLoop(comptime T: type) type {
                         .events = posix.POLL.IN,
                         .revents = 0,
                     });
+                    try poll_events.append(allocator, .watcher);
                 }
 
-                const offerer_offset = poll_fds.items.len;
                 for (offerer.pollable_fds.items) |fd| {
                     try poll_fds.append(allocator, .{
                         .fd = fd,
                         .events = posix.POLL.OUT,
                         .revents = 0,
                     });
+                    try poll_events.append(allocator, .offerer);
                 }
+
+                assert(poll_fds.items.len == poll_events.items.len);
 
                 log.debug("event loop continues with {d} FDs", .{poll_fds.items.len});
 
@@ -86,30 +92,34 @@ pub fn EventLoop(comptime T: type) type {
 
                 _ = try posix.poll(poll_fds.items, -1);
 
-                // wayland
-                if (poll_fds.items[0].revents & revents_in != 0) {
-                    _ = display.readEvents();
-                    _ = display.dispatchPending();
-                } else {
-                    display.cancelRead();
-                }
+                for (poll_fds.items, poll_events.items) |pollfd, event_type| {
+                    switch (event_type) {
+                        .wl => {
+                            if (pollfd.revents & revents_in != 0) {
+                                _ = display.readEvents();
+                                _ = display.dispatchPending();
+                            } else {
+                                display.cancelRead();
+                            }
+                        },
 
-                // ipc
-                if (poll_fds.items[1].revents & revents_in != 0) {
-                    ipc.accept();
-                }
+                        .ipc => {
+                            if (pollfd.revents & revents_in != 0) {
+                                ipc.accept();
+                            }
+                        },
 
-                // watcher
-                for (poll_fds.items[2..offerer_offset]) |poll_fd| {
-                    if (poll_fd.revents & revents_in != 0) {
-                        try watcher.handleFdRead(poll_fd.fd);
-                    }
-                }
+                        .watcher => {
+                            if (pollfd.revents & revents_in != 0) {
+                                try watcher.handleFdRead(pollfd.fd);
+                            }
+                        },
 
-                // offerer
-                for (poll_fds.items[offerer_offset..poll_fds.items.len]) |poll_fd| {
-                    if (poll_fd.revents & revents_out != 0) {
-                        try offerer.handleFdWrite(poll_fd.fd);
+                        .offerer => {
+                            if (pollfd.revents & revents_out != 0) {
+                                try offerer.handleFdWrite(pollfd.fd);
+                            }
+                        },
                     }
                 }
             }
